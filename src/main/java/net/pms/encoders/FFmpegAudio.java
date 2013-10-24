@@ -29,10 +29,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.*;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import net.pms.Messages;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.dlna.DLNAMediaInfo;
@@ -42,6 +38,9 @@ import net.pms.io.OutputParams;
 import net.pms.io.ProcessWrapper;
 import net.pms.io.ProcessWrapperImpl;
 import net.pms.network.HTTPResource;
+import net.pms.util.PlayerUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class FFmpegAudio extends FFMpegVideo {
 	private static final Logger LOGGER = LoggerFactory.getLogger(FFmpegAudio.class);
@@ -51,8 +50,12 @@ public class FFmpegAudio extends FFMpegVideo {
 	@Deprecated
 	JCheckBox noresample;
 
+	@Deprecated
 	public FFmpegAudio(PmsConfiguration configuration) {
 		super(configuration);
+	}
+
+	public FFmpegAudio() {
 	}
 
 	@Override
@@ -62,8 +65,8 @@ public class FFmpegAudio extends FFMpegVideo {
 			"p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, 0:grow"
 		);
 		PanelBuilder builder = new PanelBuilder(layout);
-		builder.setBorder(Borders.EMPTY_BORDER);
-		builder.setOpaque(false);
+		builder.border(Borders.EMPTY);
+		builder.opaque(false);
 
 		CellConstraints cc = new CellConstraints();
 
@@ -95,7 +98,6 @@ public class FFmpegAudio extends FFMpegVideo {
 		return ID;
 	}
 
-	// FIXME why is this false if launchTranscode supports it (-ss)?
 	@Override
 	public boolean isTimeSeekable() {
 		return false;
@@ -130,11 +132,11 @@ public class FFmpegAudio extends FFMpegVideo {
 
 	@Override
 	public ProcessWrapper launchTranscode(
-		String fileName,
 		DLNAResource dlna,
 		DLNAMediaInfo media,
 		OutputParams params
 	) throws IOException {
+		final String filename = dlna.getSystemName();
 		params.maxBufferSize = configuration.getMaxAudioBuffer();
 		params.waitbeforestart = 2000;
 		params.manageFastStart();
@@ -162,7 +164,7 @@ public class FFmpegAudio extends FFMpegVideo {
 		cmdList.add("" + nThreads);
 
 		cmdList.add("-i");
-		cmdList.add(fileName);
+		cmdList.add(filename);
 
 		// encoder threads
 		cmdList.add("-threads");
@@ -202,7 +204,7 @@ public class FFmpegAudio extends FFMpegVideo {
 		cmdList.toArray(cmdArray);
 
 		cmdArray = finalizeTranscoderArgs(
-			fileName,
+			filename,
 			dlna,
 			media,
 			params,
@@ -215,26 +217,15 @@ public class FFmpegAudio extends FFMpegVideo {
 		return pw;
 	}
 
-	/**
-	 * {@inheritDoc}
-	 */
 	@Override
 	public boolean isCompatible(DLNAResource resource) {
-		if (resource == null || resource.getFormat().getType() != Format.AUDIO) {
-			return false;
-		}
-
-		Format format = resource.getFormat();
-
-		if (format != null) {
-			Format.Identifier id = format.getIdentifier();
-
-			if (id.equals(Format.Identifier.FLAC)
-					|| id.equals(Format.Identifier.M4A)
-					|| id.equals(Format.Identifier.OGG)
-					|| id.equals(Format.Identifier.WAV)) {
-				return true;
-			}
+		if (
+			PlayerUtil.isAudio(resource, Format.Identifier.FLAC) ||
+			PlayerUtil.isAudio(resource, Format.Identifier.M4A) ||
+			PlayerUtil.isAudio(resource, Format.Identifier.OGG) ||
+			PlayerUtil.isAudio(resource, Format.Identifier.WAV)
+		) {
+			return true;
 		}
 
 		return false;

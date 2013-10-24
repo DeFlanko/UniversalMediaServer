@@ -1,14 +1,7 @@
 package net.pms.remote;
 
-import com.sun.net.httpserver.BasicAuthenticator;
-import com.sun.net.httpserver.Headers;
-import com.sun.net.httpserver.HttpContext;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.HttpsConfigurator;
-import com.sun.net.httpserver.HttpsParameters;
-import com.sun.net.httpserver.HttpsServer;
+import com.sun.net.httpserver.*;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -65,26 +58,25 @@ public class RemoteWeb {
 			// Setup the socket address
 			InetSocketAddress address = new InetSocketAddress(InetAddress.getByName("0.0.0.0"), port);
 
-			// Initialize the HTTP(S) server
-			if (PMS.getConfiguration().getWebHttps()) {
-				server = httpsServer(address);
-			} else {
-				server = HttpServer.create(address, 0);
-			}
-
-			// Add context handlers
-			addCtx("/", new RemoteStartHandler());
-			addCtx("/browse", new RemoteBrowseHandler(this));
-			addCtx("/play", new RemotePlayHandler(this));
-			addCtx("/media", new RemoteMediaHandler(this));
-			addCtx("/thumb", new RemoteThumbHandler(this));
-			addCtx("/raw", new RemoteRawHandler(this));
-			//addCtx("/jwplayer", new RemoteFileHandler());
-			server.setExecutor(null);
-			server.start();
-		} catch (Exception e) {
-			LOGGER.debug("Couldn't start RemoteWEB " + e);
-		}
+            // initialise the HTTP(S) server
+            if (PMS.getConfiguration().getWebHttps())
+            	server = httpsServer(address);
+            else
+            	server = HttpServer.create(address, 0);
+          
+            // Add context handlers
+            addCtx("/", new RemoteStartHandler());
+            addCtx("/browse", new RemoteBrowseHandler(this));
+            addCtx("/play", new RemotePlayHandler(this));
+            addCtx("/media", new RemoteMediaHandler(this));
+            addCtx("/thumb", new RemoteThumbHandler(this));
+            addCtx("/raw", new RemoteRawHandler(this));
+            addCtx("/js", new RemoteFileHandler());
+            server.setExecutor(null);
+            server.start();
+        } catch ( Exception e ) {
+        	LOGGER.debug("Couldn't start RemoteWEB "+e);
+        }	
 	}
 
 	private HttpServer httpsServer(InetSocketAddress address) throws Exception {
