@@ -36,7 +36,6 @@ import javax.swing.*;
 import net.pms.Messages;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
-import net.pms.dlna.DLNAMediaAudio;
 import net.pms.dlna.DLNAMediaInfo;
 import net.pms.dlna.DLNAMediaSubtitle;
 import net.pms.dlna.DLNAResource;
@@ -80,7 +79,7 @@ public class VLCVideo extends Player {
 
 	@Deprecated
 	public VLCVideo(PmsConfiguration configuration) {
-		this.configuration = configuration;
+		this();
 	}
 
 	public VLCVideo() {
@@ -209,7 +208,13 @@ public class VLCVideo extends Player {
 		args.put("vcodec", codecConfig.videoCodec);
 		args.put("acodec", codecConfig.audioCodec);
 
-		// Bitrate in kbit/s
+		/**
+		 * Bitrate in kbit/s
+		 *
+		 * TODO: Make this engine smarter with bitrates, see 
+		 * FFMpegVideo.getVideoBitrateOptions() for our best
+		 * implementation of this.
+		 */
 		if (!videoRemux) {
 			args.put("vb", "4096");
 		}
@@ -259,7 +264,7 @@ public class VLCVideo extends Player {
 	public ProcessWrapper launchTranscode(DLNAResource dlna, DLNAMediaInfo media, OutputParams params) throws IOException {
 		final String filename = dlna.getSystemName();
 		boolean isWindows = Platform.isWindows();
-		setAudioAndSubs(filename, media, params, configuration);
+		setAudioAndSubs(filename, media, params);
 
 		// Make sure we can play this
 		CodecConfig config = genConfig(params.mediaRenderer);
@@ -282,6 +287,8 @@ public class VLCVideo extends Player {
 		cmdList.add("dummy");
 
 		// Disable hardware acceleration which is enabled by default
+		// It seems this no longer works on newer versions so we should
+		// find which command it was replaced with, if any.
 		if (!configuration.isGPUAcceleration()) {
 			cmdList.add("--no-ffmpeg-hw");
 		}
@@ -346,9 +353,6 @@ public class VLCVideo extends Player {
 			} else { // VLC doesn't understand "und", but does understand a nonexistent track
 				cmdList.add("--sub-" + disableSuffix);
 			}
-		} else if (!configuration.isDisableSubtitles()) { // Not specified, use language from GUI if enabled
-			// FIXME: VLC does not understand "loc" or "und".
-			cmdList.add("--sub-language=" + configuration.getSubtitlesLanguages());
 		} else {
 			cmdList.add("--sub-" + disableSuffix);
 		}
@@ -358,8 +362,25 @@ public class VLCVideo extends Player {
 			cmdList.add("--sout-x264-preset");
 			cmdList.add("superfast");
 
+			String x264CRF = configuration.getx264ConstantRateFactor();
+
+			// Remove comment from the value
+			if (x264CRF.contains("/*")) {
+				x264CRF = x264CRF.substring(x264CRF.indexOf("/*"));
+			}
+
+			// Determine a good quality setting based on video attributes
+			if (x264CRF.contains("Automatic")) {
+				x264CRF = "16";
+
+				// Lower CRF for 720p+ content
+				if (media.getWidth() > 720) {
+					x264CRF = "19";
+				}
+			}
+
 			cmdList.add("--sout-x264-crf");
-			cmdList.add("20");
+			cmdList.add(x264CRF);
 		}
 
 		// Skip forward if necessary
@@ -548,14 +569,11 @@ public class VLCVideo extends Player {
 			return false;
 		}
 
-		// VLC is unstable when transcoding from flac. It either crashes or sends video without audio. Confirmed with 2.0.6
-		DLNAMediaAudio audio = resource.getMediaAudio();
-		if (audio != null && audio.isFLAC() == true) {
-			return false;
-		}
-
-		// Only handle local video - web video is handled by VLCWebVideo
-		if (!PlayerUtil.isVideo(resource, Format.Identifier.WEB)) {
+		// Only handle local video - not web video or audio
+		if (
+			PlayerUtil.isVideo(resource, Format.Identifier.MKV) ||
+			PlayerUtil.isVideo(resource, Format.Identifier.MPG)
+		) {
 			return true;
 		}
 

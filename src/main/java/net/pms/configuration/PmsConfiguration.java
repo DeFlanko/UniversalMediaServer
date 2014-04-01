@@ -71,6 +71,7 @@ public class PmsConfiguration {
 
 	private static final String KEY_ALTERNATE_SUBTITLES_FOLDER = "alternate_subtitles_folder";
 	private static final String KEY_ALTERNATE_THUMB_FOLDER = "alternate_thumb_folder";
+	private static final String KEY_APPEND_PROFILE_NAME = "append_profile_name";
 	private static final String KEY_SHOW_APERTURE_LIBRARY = "show_aperture_library";
 	private static final String KEY_ATZ_LIMIT = "atz_limit";
 	private static final String KEY_AUDIO_BITRATE = "audio_bitrate";
@@ -98,6 +99,7 @@ public class PmsConfiguration {
 	public static final String KEY_DISABLE_SUBTITLES = "disable_subtitles";
 	private static final String KEY_DVDISO_THUMBNAILS = "dvd_isos_thumbnails";
 	private static final String KEY_AUDIO_EMBED_DTS_IN_PCM = "audio_embed_dts_in_pcm";
+	private static final String KEY_ENCODED_AUDIO_PASSTHROUGH = "encoded_audio_passthrough";
 	private static final String KEY_ENGINES = "engines";
 	private static final String KEY_FFMPEG_ALTERNATIVE_PATH = "alternativeffmpegpath"; // TODO: FFmpegDVRMSRemux will be removed and DVR-MS will be transcoded
 	private static final String KEY_FFMPEG_MULTITHREADING = "ffmpeg_multithreading";
@@ -105,8 +107,8 @@ public class PmsConfiguration {
 	private static final String KEY_FFMPEG_AVISYNTH_CONVERT_FPS = "ffmpeg_avisynth_convertfps";
 	private static final String KEY_FFMPEG_AVISYNTH_INTERFRAME = "ffmpeg_avisynth_interframe";
 	private static final String KEY_FFMPEG_AVISYNTH_INTERFRAME_GPU = "ffmpeg_avisynth_interframegpu";
-	private static final String KEY_FFMPEG_FONT_CONFIG = "ffmpeg_font_config";
-	private static final String KEY_FFMPEG_MUX_COMPATIBLE = "ffmpeg_mux_compatible";
+	private static final String KEY_FFMPEG_FONTCONFIG = "ffmpeg_fontconfig";
+	private static final String KEY_FFMPEG_MUX_TSMUXER_COMPATIBLE = "ffmpeg_mux_tsmuxer_compatible";
 	private static final String KEY_FIX_25FPS_AV_MISMATCH = "fix_25fps_av_mismatch";
 	private static final String KEY_FOLDERS = "folders";
 	private static final String KEY_FOLDERS_MONITORED = "folders_monitored";
@@ -131,6 +133,7 @@ public class PmsConfiguration {
 	private static final String KEY_IGNORED_RENDERERS = "ignored_renderers";
 	private static final String KEY_IMAGE_THUMBNAILS_ENABLED = "image_thumbnails";
 	private static final String KEY_IP_FILTER = "ip_filter";
+	private static final String KEY_ITUNES_LIBRARY_PATH = "itunes_library_path";
 	private static final String KEY_SHOW_IPHOTO_LIBRARY = "show_iphoto_library";
 	private static final String KEY_SHOW_ITUNES_LIBRARY = "show_itunes_library";
 	private static final String KEY_LANGUAGE = "language";
@@ -164,16 +167,16 @@ public class PmsConfiguration {
 	private static final String KEY_MENCODER_USE_PCM_FOR_HQ_AUDIO_ONLY = "mencoder_usepcm_for_hq_audio_only";
 	private static final String KEY_MENCODER_VOBSUB_SUBTITLE_QUALITY = "mencoder_vobsub_subtitle_quality";
 	private static final String KEY_MENCODER_YADIF = "mencoder_yadif";
+	private static final String KEY_MIN_MEMORY_BUFFER_SIZE = "minimum_video_buffer_size";
 	private static final String KEY_MIN_PLAY_TIME = "min_playtime";
 	private static final String KEY_MIN_PLAY_TIME_WEB = "min_playtime_web";
 	private static final String KEY_MIN_PLAY_TIME_FILE = "min_playtime_file";
-	private static final String KEY_MINIMIZED = "minimized";
-	private static final String KEY_MIN_MEMORY_BUFFER_SIZE = "minimum_video_buffer_size";
 	private static final String KEY_MIN_STREAM_BUFFER = "minimum_web_buffer_size";
+	private static final String KEY_MINIMIZED = "minimized";
 	private static final String KEY_MPEG2_MAIN_SETTINGS = "mpeg2_main_settings";
 	private static final String KEY_MUX_ALLAUDIOTRACKS = "tsmuxer_mux_all_audiotracks";
 	private static final String KEY_NETWORK_INTERFACE = "network_interface";
-	private static final String KEY_HIDE_NEW_MEDIA_FOLDER = "hide_new_media";
+	private static final String KEY_HIDE_NEW_MEDIA_FOLDER = "hide_new_media_folder";
 	private static final String KEY_DISABLE_TRANSCODE_FOR_EXTENSIONS = "disable_transcode_for_extensions";
 	private static final String KEY_NUMBER_OF_CPU_CORES = "number_of_cpu_cores";
 	private static final String KEY_OPEN_ARCHIVES = "enable_archive_browsing";
@@ -197,6 +200,7 @@ public class PmsConfiguration {
 	private static final String KEY_SEARCH_FOLDER = "search_folder";
 	private static final String KEY_SEARCH_RECURSE = "search_recurse";
 	private static final String KEY_SERVER_HOSTNAME = "hostname";
+	private static final String KEY_SERVER_NAME = "server_name";
 	private static final String KEY_SERVER_PORT = "port";
 	private static final String KEY_SHARES = "shares";
 	private static final String KEY_SKIP_LOOP_FILTER_ENABLED = "mencoder_skip_loop_filter";
@@ -217,7 +221,6 @@ public class PmsConfiguration {
 	private static final String KEY_USE_MPLAYER_FOR_THUMBS = "use_mplayer_for_video_thumbs";
 	private static final String KEY_AUDIO_USE_PCM = "audio_use_pcm";
 	private static final String KEY_UUID = "uuid";
-	private static final String KEY_VIDEO_HW_ACCELERATION = "video_hardware_acceleration";
 	private static final String KEY_VIDEOTRANSCODE_START_DELAY = "videotranscode_start_delay";
 	private static final String KEY_VIRTUAL_FOLDERS = "virtual_folders";
 	private static final String KEY_VIRTUAL_FOLDERS_FILE = "virtual_folders_file";
@@ -228,7 +231,9 @@ public class PmsConfiguration {
 	private static final String KEY_VLC_SCALE = "vlc_scale";
 	private static final String KEY_VLC_SAMPLE_RATE_OVERRIDE = "vlc_sample_rate_override";
 	private static final String KEY_VLC_SAMPLE_RATE = "vlc_sample_rate";
+	private static final String KEY_WEB_AUTHENTICATE = "web_authenticate";
 	private static final String KEY_WEB_CONF_PATH = "web_conf";
+	private static final String KEY_WEB_PATH = "web_path";
 	private static final String KEY_X264_CONSTANT_RATE_FACTOR = "x264_constant_rate_factor";
 
 	// The name of the subdirectory under which UMS config files are stored for this build (default: UMS).
@@ -257,31 +262,32 @@ public class PmsConfiguration {
 		Arrays.asList(
 			KEY_ALTERNATE_THUMB_FOLDER,
 			KEY_ATZ_LIMIT,
-			KEY_NETWORK_INTERFACE,
-			KEY_IP_FILTER,
-			KEY_SORT_METHOD,
-			KEY_HIDE_EMPTY_FOLDERS,
-			KEY_HIDE_TRANSCODE_FOLDER,
-			KEY_HIDE_MEDIA_LIBRARY_FOLDER,
-			KEY_OPEN_ARCHIVES,
-			KEY_USE_CACHE,
-			KEY_HIDE_ENGINENAMES,
-			KEY_HIDE_LIVE_SUBTITLES_FOLDER,
-			KEY_SHOW_ITUNES_LIBRARY,
-			KEY_SHOW_IPHOTO_LIBRARY,
-			KEY_SHOW_APERTURE_LIBRARY,
+			KEY_AUDIO_THUMBNAILS_METHOD,
+			KEY_CHAPTER_SUPPORT,
+			KEY_DISABLE_TRANSCODE_FOR_EXTENSIONS,
 			KEY_ENGINES,
 			KEY_FOLDERS,
-			KEY_HIDE_VIDEO_SETTINGS,
-			KEY_AUDIO_THUMBNAILS_METHOD,
-			KEY_DISABLE_TRANSCODE_FOR_EXTENSIONS,
 			KEY_FORCE_TRANSCODE_FOR_EXTENSIONS,
-			KEY_SERVER_PORT,
-			KEY_SERVER_HOSTNAME,
-			KEY_CHAPTER_SUPPORT,
+			KEY_HIDE_EMPTY_FOLDERS,
+			KEY_HIDE_ENGINENAMES,
 			KEY_HIDE_EXTENSIONS,
+			KEY_HIDE_LIVE_SUBTITLES_FOLDER,
+			KEY_HIDE_MEDIA_LIBRARY_FOLDER,
+			KEY_HIDE_TRANSCODE_FOLDER,
+			KEY_HIDE_VIDEO_SETTINGS,
 			KEY_IGNORE_THE_WORD_THE,
-			KEY_PRETTIFY_FILENAMES
+			KEY_IP_FILTER,
+			KEY_NETWORK_INTERFACE,
+			KEY_OPEN_ARCHIVES,
+			KEY_PRETTIFY_FILENAMES,
+			KEY_SERVER_HOSTNAME,
+			KEY_SERVER_NAME,
+			KEY_SERVER_PORT,
+			KEY_SHOW_APERTURE_LIBRARY,
+			KEY_SHOW_IPHOTO_LIBRARY,
+			KEY_SHOW_ITUNES_LIBRARY,
+			KEY_SORT_METHOD,
+			KEY_USE_CACHE
 		)
 	);
 
@@ -575,6 +581,10 @@ public class PmsConfiguration {
 		return programPaths.getTsmuxerPath();
 	}
 
+	public String getTsmuxerNewPath() {
+		return programPaths.getTsmuxerNewPath();
+	}
+
 	public String getFlacPath() {
 		return programPaths.getFlacPath();
 	}
@@ -593,9 +603,9 @@ public class PmsConfiguration {
 	}
 
 	/**
-	 * The AC3 audio bitrate determines the quality of digital audio sound. An AV-receiver
+	 * The AC-3 audio bitrate determines the quality of digital audio sound. An AV-receiver
 	 * or amplifier has to be capable of playing this quality. Default value is 640.
-	 * @return The AC3 audio bitrate.
+	 * @return The AC-3 audio bitrate.
 	 */
 	public int getAudioBitrate() {
 		return getInt(KEY_AUDIO_BITRATE, 640);
@@ -640,6 +650,24 @@ public class PmsConfiguration {
 	 */
 	public void setHostname(String value) {
 		configuration.setProperty(KEY_SERVER_HOSTNAME, value);
+	}
+
+	/**
+	 * The name of the server.
+	 *
+	 * @return The name of the server.
+	 */
+	public String getServerName() {
+		return getString(KEY_SERVER_NAME, "Universal Media Server");
+	}
+
+	/**
+	 * Set the name of the server.
+	 *
+	 * @param value The name.
+	 */
+	public void setServerName(String value) {
+		configuration.setProperty(KEY_SERVER_NAME, value);
 	}
 
 	/**
@@ -1557,7 +1585,7 @@ public class PmsConfiguration {
 	 *
 	 * @return True if PMS should hide the folder, false othewise.
 	 */
-	public boolean getHideVideoSettings() {
+	public boolean getHideVideoSettings(ArrayList<String> tags) {
 		return getBoolean(KEY_HIDE_VIDEO_SETTINGS, true);
 	}
 
@@ -1723,6 +1751,8 @@ public class PmsConfiguration {
 					break;
 				case "vqmax":
 					returnString.append("-qmax ").append(pairArray[1]).append(" ");
+					break;
+				default:
 					break;
 			}
 		}
@@ -1903,7 +1933,6 @@ public class PmsConfiguration {
 		String defaultEngines = StringUtils.join(
 			new String[] {
 				"mencoder",
-				"avsmencoder",
 				"tsmuxer",
 				"ffmpegvideo",
 				"ffmpegaudio",
@@ -1966,8 +1995,8 @@ public class PmsConfiguration {
 		LOGGER.info("Configuration saved to: " + PROFILE_PATH);
 	}
 
-	public String getFolders() {
-		return getString(KEY_FOLDERS, "");
+	public String getFolders(ArrayList<String> tags) {
+		return tagLoop(tags, ".folders", KEY_FOLDERS);
 	}
 
 	public void setFolders(String value) {
@@ -2088,6 +2117,7 @@ public class PmsConfiguration {
 	 * <li>2: Sort by modified date, oldest first</li>
 	 * <li>3: Case-insensitive ASCIIbetical sort</li>
 	 * <li>4: Locale-sensitive natural sort</li>
+	 * <li>5: Random</li>
 	 * </ul>
 	 * Default value is 4.
 	 * @return The sort method
@@ -2105,6 +2135,7 @@ public class PmsConfiguration {
 	 * <li>2: Sort by modified date, oldest first</li>
 	 * <li>3: Case-insensitive ASCIIbetical sort</li>
 	 * <li>4: Locale-sensitive natural sort</li>
+	 * <li>5: Random</li>
 	 * </ul>
 	 * @param value The sort method to use
 	 */
@@ -2144,6 +2175,14 @@ public class PmsConfiguration {
 		return getBoolean(KEY_AUDIO_EMBED_DTS_IN_PCM, false);
 	}
 
+	public void setEncodedAudioPassthrough(boolean value) {
+		configuration.setProperty(KEY_ENCODED_AUDIO_PASSTHROUGH, value);
+	}
+
+	public boolean isEncodedAudioPassthrough() {
+		return getBoolean(KEY_ENCODED_AUDIO_PASSTHROUGH, false);
+	}
+
 	public void setMencoderMuxWhenCompatible(boolean value) {
 		configuration.setProperty(KEY_MENCODER_MUX_COMPATIBLE, value);
 	}
@@ -2160,20 +2199,20 @@ public class PmsConfiguration {
 		return getBoolean(KEY_MENCODER_NORMALIZE_VOLUME, false);
 	}
 
-	public void setFFmpegMuxWhenCompatible(boolean value) {
-		configuration.setProperty(KEY_FFMPEG_MUX_COMPATIBLE, value);
+	public void setFFmpegMuxWithTsMuxerWhenCompatible(boolean value) {
+		configuration.setProperty(KEY_FFMPEG_MUX_TSMUXER_COMPATIBLE, value);
 	}
 
-	public boolean isFFmpegMuxWhenCompatible() {
-		return getBoolean(KEY_FFMPEG_MUX_COMPATIBLE, false);
+	public boolean isFFmpegMuxWithTsMuxerWhenCompatible() {
+		return getBoolean(KEY_FFMPEG_MUX_TSMUXER_COMPATIBLE, true);
 	}
 
 	public void setFFmpegFontConfig(boolean value) {
-		configuration.setProperty(KEY_FFMPEG_FONT_CONFIG, value);
+		configuration.setProperty(KEY_FFMPEG_FONTCONFIG, value);
 	}
 
 	public boolean isFFmpegFontConfig() {
-		return getBoolean(KEY_FFMPEG_FONT_CONFIG, false);
+		return getBoolean(KEY_FFMPEG_FONTCONFIG, false);
 	}
 
 	public void setMuxAllAudioTracks(boolean value) {
@@ -2239,6 +2278,10 @@ public class PmsConfiguration {
 
 	public boolean isShowItunesLibrary() {
 		return getBoolean(KEY_SHOW_ITUNES_LIBRARY, false);
+	}
+
+	public String getItunesLibraryPath() {
+		return getString(KEY_ITUNES_LIBRARY_PATH, "");
 	}
 
 	public void setShowItunesLibrary(boolean value) {
@@ -2369,7 +2412,7 @@ public class PmsConfiguration {
 		configuration.setProperty(KEY_RUN_WIZARD, value);
 	}
 
-	public boolean isHideNewMediaFolder() {
+	public boolean isHideNewMediaFolder(ArrayList<String> tags) {
 		return getBoolean(KEY_HIDE_NEW_MEDIA_FOLDER, false);
 	}
 
@@ -2377,7 +2420,7 @@ public class PmsConfiguration {
 		this.configuration.setProperty(KEY_HIDE_NEW_MEDIA_FOLDER, value);
 	}
 
-	public boolean isHideRecentlyPlayedFolder() {
+	public boolean isHideRecentlyPlayedFolder(ArrayList<String> tags) {
 		return getBoolean(PmsConfiguration.KEY_HIDE_RECENTLY_PLAYED_FOLDER, false);
 	}
 
@@ -2439,12 +2482,12 @@ public class PmsConfiguration {
 		configuration.setProperty(KEY_RENDERER_FORCE_DEFAULT, value);
 	}
 
-	public String getVirtualFolders() {
-		return getString(KEY_VIRTUAL_FOLDERS, "");
+	public String getVirtualFolders(ArrayList<String> tags) {
+		return tagLoop(tags, ".vfolders", KEY_VIRTUAL_FOLDERS);
 	}
 
-	public String getVirtualFoldersFile() {
-		return getString(KEY_VIRTUAL_FOLDERS_FILE, "");
+	public String getVirtualFoldersFile(ArrayList<String> tags) {
+		return tagLoop(tags, ".vfolders.file", KEY_VIRTUAL_FOLDERS_FILE);
 	}
 
 	public String getProfilePath() {
@@ -2836,62 +2879,98 @@ public class PmsConfiguration {
 		return getInt(KEY_RESUME_KEEP_TIME, 0);
 	}
 
-	public boolean hideSubInfo() {
+	public boolean hideSubsInfo() {
 		return getBoolean(KEY_HIDE_SUBS_INFO, false);
+	}
+
+	public String getPlugins(ArrayList<String> tags) {
+		return tagLoop(tags, ".plugins", "dummy");
+	}
+
+	public boolean isHideWebFolder(ArrayList<String> tags) {
+		return tagLoopBool(tags, ".web", "dummy", false);
+	}
+
+	private String tagLoop(ArrayList<String> tags, String suff, String fallback) {
+		if (tags == null || tags.isEmpty()) {
+			// no tags use fallback
+			return getString(fallback, "");
+		}
+
+		for (String tag : tags) {
+			String x = (tag.toLowerCase() + suff).replaceAll(" ", "_");
+			String res = getString(x, "");
+			if (StringUtils.isNotBlank(res)) {
+				// use first tag found
+				return res;
+			}
+		}
+
+		// down here no matching tag was found
+		// return fallback
+		return getString(fallback, "");
+	}
+
+	private boolean tagLoopBool(ArrayList<String> tags, String suff, String fallback, boolean def) {
+		String b = tagLoop(tags, suff, fallback);
+		if (StringUtils.isBlank(b)) {
+			return def;
+		}
+
+		return b.trim().equalsIgnoreCase("true");
+	}
+
+	/**
+	 * Whether the profile name should be appended to the server name when
+	 * displayed on the renderer
+	 *
+	 * @return True if the profile name should be appended.
+	 */
+	public boolean isAppendProfileName() {
+		return getBoolean(KEY_APPEND_PROFILE_NAME, false);
+	}
+
+	/**
+	 * Set whether the profile name should be appended to the server name
+	 * when displayed on the renderer
+	 *
+	 * @param value Set to true if the profile name should be appended.
+	 */
+	public void setAppendProfileName(boolean value) {
+		configuration.setProperty(KEY_APPEND_PROFILE_NAME, value);
 	}
 
 	/**
 	 * Web stuff
 	 */
+	private static final String KEY_NO_FOLDERS = "no_shared";
+	private static final String KEY_WEB_HTTPS = "use_https";
 
-	private static final String KEY_NO_FOLDERS="no_shared";
-	private static final String KEY_WEB_HTTPS="use_https";
-    
-    public String getFolders(String tag) {
-    	if(tag == null) {
-    		return getFolders();
-    	}
-    	String x=(tag.toLowerCase()+".folders").replaceAll(" ", "_");
-    	String res=getString(x, "");
-    	if(StringUtils.isEmpty(res)) {
-    		return getFolders();
-    	}
-    	return res;
-    }
-    
-    public String getVirtualFolders(String tag) {
-    	if(tag == null) {
-    		return getVirtualFolders();
-    	}
-    	String x=(tag.toLowerCase()+".vfolders").replaceAll(" ", "_");
-    	String res=getString(x, "");
-    	if(StringUtils.isEmpty(res)) {
-    		return getVirtualFolders();
-    	}
-    	return res;
-    }
-    
-    public boolean getNoFolders(String tag) {
-    	if(tag == null) {
-    		return getBoolean(KEY_NO_FOLDERS,false);
-    	}
-    	String x=(tag.toLowerCase()+".no_shared").replaceAll(" ", "_");
-    	return getBoolean(x,false);
-    }
-    
-    public String[] getPlugins(String tag) {
-    	if(tag == null) {
-    		return null;
-    	}
-    	String x=(tag.toLowerCase()+".plugins").replaceAll(" ", "_");
-    	String str=getString(x,"");
-    	if(StringUtils.isEmpty(str)) {
-    		return null;
-    	}
-    	return str.split(",");
-    }
-    
-    public boolean getWebHttps() {
-    	return getBoolean(KEY_WEB_HTTPS, false);
-    }
+	public boolean getNoFolders(String tag) {
+		if (tag == null) {
+			return getBoolean(KEY_NO_FOLDERS, false);
+		}
+		String x = (tag.toLowerCase() + ".no_shared").replaceAll(" ", "_");
+		return getBoolean(x, false);
+	}
+
+	public boolean getWebHttps() {
+		return getBoolean(KEY_WEB_HTTPS, false);
+	}
+
+	public File getWebPath() {
+		File path = new File(getString(KEY_WEB_PATH, "web"));
+		if (!path.exists()) {
+			path.mkdirs();
+		}
+		return path;
+	}
+
+	public File getWebFile(String file) {
+		return new File(getWebPath().getAbsolutePath() + File.separator + file);
+	}
+
+	public boolean isWebAuthenticate() {
+		return getBoolean(KEY_WEB_AUTHENTICATE, false);
+	}
 }

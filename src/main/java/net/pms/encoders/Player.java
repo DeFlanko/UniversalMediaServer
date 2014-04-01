@@ -70,8 +70,7 @@ public abstract class Player {
 	public abstract String mimeType();
 	public abstract String executable();
 	protected static PmsConfiguration configuration = PMS.getConfiguration();
-	private static List<FinalizeTranscoderArgsListener> finalizeTranscoderArgsListeners =
-		new ArrayList<>();
+	private static List<FinalizeTranscoderArgsListener> finalizeTranscoderArgsListeners = new ArrayList<>();
 
 	public static void initializeFinalizeTranscoderArgsListeners() {
 		for (ExternalListener listener : ExternalFactory.getExternalListeners()) {
@@ -123,6 +122,7 @@ public abstract class Player {
 	public final ProcessWrapper launchTranscode(String filename, DLNAResource dlna, DLNAMediaInfo media, OutputParams params) throws IOException {
 		return launchTranscode(dlna, media, params);
 	}
+
 	public abstract ProcessWrapper launchTranscode(
 		DLNAResource dlna,
 		DLNAMediaInfo media,
@@ -205,7 +205,7 @@ public abstract class Player {
 	 * @param params
 	 * The parameters to populate.
 	 */
-	public void setAudioAndSubs(String fileName, DLNAMediaInfo media, OutputParams params) {
+	public static void setAudioAndSubs(String fileName, DLNAMediaInfo media, OutputParams params) {
 		setAudioOutputParameters(media, params);
 		setSubtitleOutputParameters(fileName, media, params);
 	}
@@ -219,7 +219,7 @@ public abstract class Player {
 	 * @param params
 	 * The parameters to populate.
 	 */
-	public void setAudioOutputParameters(DLNAMediaInfo media, OutputParams params) {
+	public static void setAudioOutputParameters(DLNAMediaInfo media, OutputParams params) {
 		if (params.aid == null && media != null && media.getFirstAudioTrack() != null) {
 			// check for preferred audio
 			DLNAMediaAudio dtsTrack = null;
@@ -262,7 +262,7 @@ public abstract class Player {
 	 * @param params
 	 * The parameters to populate.
 	 */
-	public void setSubtitleOutputParameters(String fileName, DLNAMediaInfo media, OutputParams params) {
+	public static void setSubtitleOutputParameters(String fileName, DLNAMediaInfo media, OutputParams params) {
 		String currentLang = null;
 		DLNAMediaSubtitle matchedSub = null;
 
@@ -298,8 +298,8 @@ public abstract class Player {
 		while (st.hasMoreTokens()) {
 			String pair = st.nextToken();
 			if (pair.contains(",")) {
-				String audio = pair.substring(0, pair.indexOf(","));
-				String sub = pair.substring(pair.indexOf(",") + 1);
+				String audio = pair.substring(0, pair.indexOf(','));
+				String sub = pair.substring(pair.indexOf(',') + 1);
 				audio = audio.trim();
 				sub = sub.trim();
 				LOGGER.trace("Searching for a match for: " + currentLang + " with " + audio + " and " + sub);
@@ -406,7 +406,7 @@ public abstract class Player {
 
 			if (params.sid == null) {
 				st = new StringTokenizer(configuration.getSubtitlesLanguages(), ",");
-				while (st != null && st.hasMoreTokens()) {
+				while (st.hasMoreTokens()) {
 					String lang = st.nextToken();
 					lang = lang.trim();
 					LOGGER.trace("Looking for a subtitle track with lang: " + lang);

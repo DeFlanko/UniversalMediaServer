@@ -3,9 +3,12 @@ package net.pms.util;
 import java.io.*;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import net.pms.PMS;
+import net.pms.configuration.PmsConfiguration;
 import net.pms.dlna.DLNAMediaInfo;
 import net.pms.dlna.DLNAMediaSubtitle;
+import net.pms.formats.FormatFactory;
 import net.pms.formats.v2.SubtitleType;
 import org.apache.commons.io.FilenameUtils;
 import static org.apache.commons.lang.StringUtils.isBlank;
@@ -139,7 +142,7 @@ public class FileUtil {
 	}
 
 	public static String getExtension(String f) {
-		int point = f.lastIndexOf(".");
+		int point = f.lastIndexOf('.');
 
 		if (point == -1) {
 			return null;
@@ -149,7 +152,7 @@ public class FileUtil {
 	}
 
 	public static String getFileNameWithoutExtension(String f) {
-		int point = f.lastIndexOf(".");
+		int point = f.lastIndexOf('.');
 
 		if (point == -1) {
 			point = f.length();
@@ -158,9 +161,20 @@ public class FileUtil {
 		return f.substring(0, point);
 	}
 
+	/**
+	 * Returns the filename after being "prettified", which involves
+	 * attempting to strip away certain things like information about the
+	 * quality, resolution, codecs, release groups, fansubbers, etc.,
+	 * replacing periods with spaces, and various other things to produce a
+	 * more "pretty" and standardized filename.
+	 *
+	 * @param f The filename
+	 *
+	 * @return The prettified filename
+	 */
 	public static String getFileNameWithRewriting(String f) {
 		String formattedName;
-		int point = f.lastIndexOf(".");
+		int point = f.lastIndexOf('.');
 
 		if (point == -1) {
 			point = f.length();
@@ -169,13 +183,46 @@ public class FileUtil {
 		// Remove file extension
 		formattedName = f.substring(0, point);
 
-		String commonFileEnds = "[\\s\\.]AC3.*|[\\s\\.]REPACK.*|[\\s\\.]480p.*|[\\s\\.]720p.*|[\\s\\.]m-720p.*|[\\s\\.]900p.*|[\\s\\.]1080p.*|[\\s\\.]HDTV.*|[\\s\\.]DSR.*|[\\s\\.]PDTV.*|[\\s\\.]WS.*|[\\s\\.]HQ.*|[\\s\\.]DVDRip.*|[\\s\\.]TVRiP.*|[\\s\\.]BDRip.*|[\\s\\.]BluRay.*|[\\s\\.]Blu-ray.*|[\\s\\.]SUBBED.*|[\\s\\.]x264.*|[\\s\\.]Dual[\\s\\.]Audio.*|[\\s\\.]HSBS.*|[\\s\\.]H-SBS.*|[\\s\\.]RERiP.*|[\\s\\.]DIRFIX.*";
-		String commonFileEndsMatch = ".*[\\s\\.]AC3.*|.*[\\s\\.]REPACK.*|.*[\\s\\.]480p.*|.*[\\s\\.]720p.*|.*[\\s\\.]m-720p.*|.*[\\s\\.]900p.*|.*[\\s\\.]1080p.*|.*[\\s\\.]HDTV.*|.*[\\s\\.]DSR.*|.*[\\s\\.]PDTV.*|.*[\\s\\.]WS.*|.*[\\s\\.]HQ.*|.*[\\s\\.]DVDRip.*|.*[\\s\\.]TVRiP.*|.*[\\s\\.]BDRip.*|.*[\\s\\.]BluRay.*|.*[\\s\\.]Blu-ray.*|.*[\\s\\.]SUBBED.*|.*[\\s\\.]x264.*|.*[\\s\\.]Dual[\\s\\.]Audio.*|.*[\\s\\.]HSBS.*|.*[\\s\\.]H-SBS.*|.*[\\s\\.]RERiP.*|.*[\\s\\.]DIRFIX.*";
-		String commonFileEndsCaseSensitive = "[\\s\\.]PROPER.*|[\\s\\.]iNTERNAL.*|[\\s\\.]LIMITED.*|[\\s\\.]LiMiTED.*|[\\s\\.]FESTiVAL.*|[\\s\\.]NORDIC.*";
+		String commonFileEnds = "[\\s\\.]AC3.*|[\\s\\.]REPACK.*|[\\s\\.]480p.*|[\\s\\.]720p.*|[\\s\\.]m-720p.*|[\\s\\.]900p.*|[\\s\\.]1080p.*|[\\s\\.]HDTV.*|[\\s\\.]DSR.*|[\\s\\.]PDTV.*|[\\s\\.]WS.*|[\\s\\.]HQ.*|[\\s\\.]DVDRip.*|[\\s\\.]TVRiP.*|[\\s\\.]BDRip.*|[\\s\\.]WEBRip.*|[\\s\\.]BluRay.*|[\\s\\.]Blu-ray.*|[\\s\\.]SUBBED.*|[\\s\\.]x264.*|[\\s\\.]Dual[\\s\\.]Audio.*|[\\s\\.]HSBS.*|[\\s\\.]H-SBS.*|[\\s\\.]RERiP.*|[\\s\\.]DIRFIX.*";
+		String commonFileEndsMatch = ".*[\\s\\.]AC3.*|.*[\\s\\.]REPACK.*|.*[\\s\\.]480p.*|.*[\\s\\.]720p.*|.*[\\s\\.]m-720p.*|.*[\\s\\.]900p.*|.*[\\s\\.]1080p.*|.*[\\s\\.]HDTV.*|.*[\\s\\.]DSR.*|.*[\\s\\.]PDTV.*|.*[\\s\\.]WS.*|.*[\\s\\.]HQ.*|.*[\\s\\.]DVDRip.*|.*[\\s\\.]TVRiP.*|.*[\\s\\.]BDRip.*|.*[\\s\\.]WEBRip.*|.*[\\s\\.]BluRay.*|.*[\\s\\.]Blu-ray.*|.*[\\s\\.]SUBBED.*|.*[\\s\\.]x264.*|.*[\\s\\.]Dual[\\s\\.]Audio.*|.*[\\s\\.]HSBS.*|.*[\\s\\.]H-SBS.*|.*[\\s\\.]RERiP.*|.*[\\s\\.]DIRFIX.*";
+		String commonFileEndsCaseSensitive = "[\\s\\.]PROPER.*|[\\s\\.]iNTERNAL.*|[\\s\\.]LIMITED.*|[\\s\\.]LiMiTED.*|[\\s\\.]FESTiVAL.*|[\\s\\.]NORDIC.*|[\\s\\.]REAL.*";
 
 		String commonFileMiddle = "(?i)(Special[\\s\\.]Edition|Unrated|Final[\\s\\.]Cut|Remastered|Extended[\\s\\.]Cut|Extended)";
 
-		if (formattedName.matches(".*[sS]0\\d[eE]\\d\\d.*")) {
+		if (formattedName.matches(".*[sS]0\\d[eE]\\d\\d[eE]\\d\\d.*")) {
+			// This matches scene and most p2p TV episodes within the first 9 seasons that are double or triple episodes
+
+			// Rename the season/episode numbers. For example, "S01E01" changes to " - 101"
+			// Then strip the end of the episode if it does not have the episode name in the title
+			formattedName = formattedName.replaceAll("(?i)[\\s\\.]S0(\\d)E(\\d)(\\d)E(\\d)(\\d)(" + commonFileEnds + ")", " - $1$2$3-$1$4$5");
+			formattedName = formattedName.replaceAll("(?i)[\\s\\.]S0(\\d)E(\\d)(\\d)E(\\d)(\\d)(" + commonFileEndsCaseSensitive + ")", " - $1$2$3-$1$4$5");
+
+			// If it matches this then it didn't match the previous one, which means there is probably an episode title in the filename
+			formattedName = formattedName.replaceAll("(?i)[\\s\\.]S0(\\d)E(\\d)(\\d)E(\\d)(\\d)[\\s\\.]", " - $1$2$3-$1$4$5 - ");
+
+			// Remove stuff at the end of the filename like release group, quality, source, etc.
+			formattedName = formattedName.replaceAll("(?i)" + commonFileEnds, "");
+			formattedName = formattedName.replaceAll(commonFileEndsCaseSensitive, "");
+
+			// Replace periods with spaces
+			formattedName = formattedName.replaceAll("\\.", " ");
+		} else if (formattedName.matches(".*[sS][1-9]\\d[eE]\\d\\d[eE]\\d\\d.*")) {
+			// This matches scene and most p2p TV episodes after their first 9 seasons that are double episodes
+
+			// Rename the season/episode numbers. For example, "S11E01" changes to " - 1101"
+			formattedName = formattedName.replaceAll("(?i)[\\s\\.]S([1-9]\\d)E(\\d)(\\d)E(\\d)(\\d)(" + commonFileEnds + ")", " - $1$2$3-$1$4$5");
+			formattedName = formattedName.replaceAll("(?i)[\\s\\.]S([1-9]\\d)E(\\d)(\\d)E(\\d)(\\d)(" + commonFileEndsCaseSensitive + ")", " - $1$2$3-$1$4$5");
+
+			// If it matches this then it didn't match the previous one, which means there is probably an episode title in the filename
+			formattedName = formattedName.replaceAll("(?i)[\\s\\.]S([1-9]\\d)E(\\d)(\\d)E(\\d)(\\d)[\\s\\.]", " - $1$2$3-$1$4$5 - ");
+
+			// Remove stuff at the end of the filename like release group, quality, source, etc.
+			formattedName = formattedName.replaceAll("(?i)" + commonFileEnds, "");
+			formattedName = formattedName.replaceAll(commonFileEndsCaseSensitive, "");
+
+			// Replace periods with spaces
+			formattedName = formattedName.replaceAll("\\.", " ");
+		} else if (formattedName.matches(".*[sS]0\\d[eE]\\d\\d.*")) {
 			// This matches scene and most p2p TV episodes within the first 9 seasons
 
 			// Rename the season/episode numbers. For example, "S01E01" changes to " - 101"
@@ -279,7 +326,7 @@ public class FileUtil {
 
 			// Remove group name from the beginning of the filename
 			if (formattedName.substring(0, 1).matches("\\[")) {
-				int closingBracketIndex = formattedName.indexOf("]");
+				int closingBracketIndex = formattedName.indexOf(']');
 				if (closingBracketIndex != -1) {
 					formattedName = formattedName.substring(closingBracketIndex + 1);
 				}
@@ -299,7 +346,7 @@ public class FileUtil {
 
 			// Remove group name from the beginning of the filename
 			if (formattedName.substring(0, 1).matches("\\[")) {
-				int closingBracketIndex = formattedName.indexOf("]");
+				int closingBracketIndex = formattedName.indexOf(']');
 				if (closingBracketIndex != -1) {
 					formattedName = formattedName.substring(closingBracketIndex + 1);
 				}
@@ -344,7 +391,7 @@ public class FileUtil {
 	}
 
 	public static File isFileExists(File f, String ext) {
-		int point = f.getName().lastIndexOf(".");
+		int point = f.getName().lastIndexOf('.');
 
 		if (point == -1) {
 			point = f.getName().length();
@@ -421,9 +468,24 @@ public class FileUtil {
 			cache = new HashMap<>();
 		}
 
+		final Set<String> supported = SubtitleType.getSupportedFileExtensions();
+
 		File[] allSubs = cache.get(subFolder);
 		if (allSubs == null) {
-			allSubs = subFolder.listFiles();
+			allSubs = subFolder.listFiles(
+				new FilenameFilter() {
+					@Override
+					public boolean accept(File dir, String name) {
+						String ext = FilenameUtils.getExtension(name).toLowerCase();
+						if ("sub".equals(ext)) {
+							// Avoid microdvd/vobsub confusion by ignoring sub+idx pairs here since
+							// they'll come in unambiguously as vobsub via the idx file anyway
+							return isFileExists(new File(dir, name), "idx") == null;
+						}
+						return supported.contains(ext);
+					}
+				}
+			);
 
 			if (allSubs != null) {
 				cache.put(subFolder, allSubs);
@@ -435,7 +497,7 @@ public class FileUtil {
 			for (File f : allSubs) {
 				if (f.isFile() && !f.isHidden()) {
 					String fName = f.getName().toLowerCase();
-					for (String ext : SubtitleType.getSupportedFileExtensions()) {
+					for (String ext : supported) {
 						if (fName.length() > ext.length() && fName.startsWith(fileName) && endsWithIgnoreCase(fName, "." + ext)) {
 							int a = fileName.length();
 							int b = fName.length() - ext.length() - 1;
@@ -478,8 +540,8 @@ public class FileUtil {
 									if (code.length() > 0) {
 										sub.setFlavor(code);
 										if (sub.getFlavor().contains("-")) {
-											String flavorLang = sub.getFlavor().substring(0, sub.getFlavor().indexOf("-"));
-											String flavorTitle = sub.getFlavor().substring(sub.getFlavor().indexOf("-") + 1);
+											String flavorLang = sub.getFlavor().substring(0, sub.getFlavor().indexOf('-'));
+											String flavorTitle = sub.getFlavor().substring(sub.getFlavor().indexOf('-') + 1);
 											if (Iso639.getCodeList().contains(flavorLang)) {
 												sub.setLang(flavorLang);
 												sub.setFlavor(flavorTitle);
@@ -802,5 +864,44 @@ public class FileUtil {
 		}
 
 		return isWritable;
+	}
+
+	public static boolean isFileRelevant(File f, PmsConfiguration configuration) {
+		String fileName = f.getName().toLowerCase();
+		return (configuration.isArchiveBrowsing() && (fileName.endsWith(".zip") || fileName.endsWith(".cbz")
+			|| fileName.endsWith(".rar") || fileName.endsWith(".cbr")))
+			|| fileName.endsWith(".iso") || fileName.endsWith(".img")
+			|| fileName.endsWith(".m3u") || fileName.endsWith(".m3u8") || fileName.endsWith(".pls") || fileName.endsWith(".cue");
+	}
+
+	public static boolean isFolderRelevant(File f, PmsConfiguration configuration) {
+		boolean isRelevant = false;
+
+		if (f.isDirectory() && configuration.isHideEmptyFolders()) {
+			File[] children = f.listFiles();
+
+			// listFiles() returns null if "this abstract pathname does not denote a directory, or if an I/O error occurs".
+			// in this case (since we've already confirmed that it's a directory), this seems to mean the directory is non-readable
+			// http://www.ps3mediaserver.org/forum/viewtopic.php?f=6&t=15135
+			// http://stackoverflow.com/questions/3228147/retrieving-the-underlying-error-when-file-listfiles-return-null
+			if (children == null) {
+				LOGGER.warn("Can't list files in non-readable directory: {}", f.getAbsolutePath());
+			} else {
+				for (File child : children) {
+					if (child.isFile()) {
+						if (FormatFactory.getAssociatedFormat(child.getName()) != null || isFileRelevant(child, configuration)) {
+							isRelevant = true;
+							break;
+						}
+					} else {
+						if (isFolderRelevant(child, configuration)) {
+							isRelevant = true;
+							break;
+						}
+					}
+				}
+			}
+		}
+		return isRelevant;
 	}
 }

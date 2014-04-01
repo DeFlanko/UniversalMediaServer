@@ -64,16 +64,16 @@ public class MapFileConfiguration {
 
 	@Deprecated
 	public static List<MapFileConfiguration> parse(String conf) {
-		return parseVirtualFolders();
+		return parseVirtualFolders(null);
 	}
 
-	public static List<MapFileConfiguration> parseVirtualFolders() {
+	public static List<MapFileConfiguration> parseVirtualFolders(ArrayList<String> tags) {
 		String conf;
 
-		if (configuration.getVirtualFoldersFile().trim().length() > 0) {
+		if (configuration.getVirtualFoldersFile(tags).trim().length() > 0) {
 			// Get the virtual folder info from the user's file
-			conf = configuration.getVirtualFoldersFile().trim().replaceAll("&comma;", ",");
-			File file = new File(conf);
+			conf = configuration.getVirtualFoldersFile(tags).trim().replaceAll("&comma;", ",");
+			File file = new File(configuration.getProfileDirectory(), conf);
 			conf = null;
 
 			if (FileUtil.isFileReadable(file)) {
@@ -92,30 +92,30 @@ public class MapFileConfiguration {
 			Type listType = (new TypeToken<ArrayList<MapFileConfiguration>>() { }).getType();
 			List<MapFileConfiguration> out = gson.fromJson(conf, listType);
 			return out;
-		} else if (configuration.getVirtualFolders().trim().length() > 0) {
+		} else if (configuration.getVirtualFolders(tags).trim().length() > 0) {
 			// Get the virtual folder info from the config string
-			conf = configuration.getVirtualFolders().trim().replaceAll("&comma;", ",");
-			String jsonStringFromConf = "";
+			conf = configuration.getVirtualFolders(tags).trim().replaceAll("&comma;", ",");
 
 			// Convert our syntax into JSON syntax
 			String arrayLevel1[] = conf.split("\\|");
 			int i = 0;
 			boolean firstLoop = true;
+			StringBuilder jsonStringFromConf = new StringBuilder();
 			for (String value : arrayLevel1) {
 				if (!firstLoop) {
-					jsonStringFromConf += ",";
+					jsonStringFromConf.append(",");
 				}
 
 				if (i == 0) {
-					jsonStringFromConf += "[{\"name\":\"" + value + "\",files:[";
+					jsonStringFromConf.append("[{\"name\":\"").append(value).append("\",files:[");
 					i++;
 				} else {
 					String arrayLevel2[] = value.split(",");
 					for (String value2 : arrayLevel2) {
-						jsonStringFromConf += "\"" + value2 + "\",";
+						jsonStringFromConf.append("\"").append(value2).append("\",");
 					}
 
-					jsonStringFromConf += "]}]";
+					jsonStringFromConf.append("]}]");
 					firstLoop = false;
 					i = 0;
 				}
@@ -125,7 +125,7 @@ public class MapFileConfiguration {
 			gsonBuilder.registerTypeAdapter(File.class, new FileSerializer());
 			Gson gson = gsonBuilder.create();
 			Type listType = (new TypeToken<ArrayList<MapFileConfiguration>>() { }).getType();
-			List<MapFileConfiguration> out = gson.fromJson(jsonStringFromConf.replaceAll("\\\\","\\\\\\\\"), listType);
+			List<MapFileConfiguration> out = gson.fromJson(jsonStringFromConf.toString().replaceAll("\\\\","\\\\\\\\"), listType);
 
 			return out;
 		}

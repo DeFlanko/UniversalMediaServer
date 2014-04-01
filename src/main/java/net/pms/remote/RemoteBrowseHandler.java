@@ -2,14 +2,13 @@ package net.pms.remote;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import com.sun.net.httpserver.HttpPrincipal;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URLEncoder;
 import java.util.List;
-import net.pms.PMS;
+import net.pms.Messages;
 import net.pms.dlna.DLNAResource;
 import net.pms.dlna.RootFolder;
-import net.pms.util.PropertiesUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,47 +22,64 @@ public class RemoteBrowseHandler implements HttpHandler {
 	}
 
 	private String mkBrowsePage(String id, HttpExchange t) throws IOException {
-		HttpPrincipal p = t.getPrincipal();
-		RootFolder root = parent.getRoot(p.getUsername(), true);
+		String user = RemoteUtil.userName(t);
+		RootFolder root = parent.getRoot(user, true, t);
 		List<DLNAResource> res = root.getDLNAResources(id, true, 0, 0, root.getDefaultRenderer(), null);
-		StringBuilder sb = new StringBuilder();
-		sb.append("<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:og=\"http://opengraphprotocol.org/schema/\">");
-		sb.append(CRLF);
-		sb.append("<link rel=\"stylesheet\" href=\"");
-		sb.append("http://swesub.nu/css/style.css");
-		sb.append("\">");
-		sb.append(CRLF);
-		sb.append("<head>");
-		sb.append(CRLF);
-		sb.append("<meta charset=\"utf-8\">");
-		sb.append(CRLF);
-		sb.append("<title>");
-		sb.append(PropertiesUtil.getProjectProperties().get("project.name")).append(" ").append(PMS.getVersion());
-		sb.append("</title></head><body>");
-		sb.append(CRLF);
-		sb.append("<div class=\"subtitles cover left\">");
-		sb.append("<ul>");
-		sb.append(CRLF);
-		for (DLNAResource r : res) {
-			String newId = r.getResourceId();
-			String thumb = "/thumb/" + newId;
-			String path = "/browse/";
-			if (!r.isFolder()) {
-				path = "/play/";
-				//newId = newId + "." + r.getFormat().getMatchedId();
-			}
-			sb.append("<li>");
-			sb.append("<a href=\"").append(path).append(newId).append("\"");
-			sb.append(" title=\"").append(r.getDisplayName()).append("\">");
-			sb.append("<img class=\"cover\" src=\"").append(thumb).append("\" alt=\"\" />");
-			sb.append("<br><span class=\"ep\">");
-			sb.append(r.getDisplayName());
-			sb.append("</span>");
-			sb.append("</a></li>");
-			sb.append(CRLF);
-		}
-		sb.append("</ul></div></body></html>");
-		sb.append(CRLF);
+
+		// Media browser HTML
+		StringBuilder sb          = new StringBuilder();
+		StringBuilder foldersHtml = new StringBuilder();
+		StringBuilder mediaHtml   = new StringBuilder();
+
+		sb.append("<!DOCTYPE html>").append(CRLF);
+			sb.append("<head>").append(CRLF);
+				sb.append("<meta charset=\"utf-8\">").append(CRLF);
+				sb.append("<link rel=\"stylesheet\" href=\"/files/reset.css\" type=\"text/css\" media=\"screen\">").append(CRLF);
+				sb.append("<link rel=\"stylesheet\" href=\"/files/web.css\" type=\"text/css\" media=\"screen\">").append(CRLF);
+				sb.append("<link rel=\"icon\" href=\"/files/favicon.ico\" type=\"image/x-icon\">").append(CRLF);
+				sb.append("<script src=\"/files/jquery.min.js\"></script>");
+				sb.append("<script src=\"/files/jquery.ums.js\"></script>");
+				sb.append("<title>Universal Media Server</title>").append(CRLF);
+			sb.append("</head>").append(CRLF);
+			sb.append("<body id=\"ContentPage\">").append(CRLF);
+				sb.append("<div id=\"Container\">");
+					sb.append("<div id=\"Menu\">");
+						sb.append("<a href=\"/browse/0\" id=\"HomeButton\"></a>");
+					sb.append("</div>");
+					for (DLNAResource r : res) {
+						String newId = r.getResourceId();
+						String idForWeb = URLEncoder.encode(newId, "UTF-8");
+						String thumb = "/thumb/" + idForWeb;
+						String name = r.resumeName();
+
+						if (r.isFolder()) {
+							// Do not display the transcode folder in the web interface
+							if (!name.equals(Messages.getString("TranscodeVirtualFolder.0"))) {
+								// The resource is a folder
+								foldersHtml.append("<li>");
+									foldersHtml.append("<a href=\"/browse/").append(idForWeb).append("\" title=\"").append(name).append("\">");
+										foldersHtml.append("<span>").append(name).append("</span>");
+									foldersHtml.append("</a>").append(CRLF);
+								foldersHtml.append("</li>").append(CRLF);
+							}
+						} else {
+							// The resource is a media file
+							mediaHtml.append("<li>");
+								mediaHtml.append("<a href=\"/play/").append(idForWeb).append("\" title=\"").append(name).append("\">");
+									mediaHtml.append("<img src=\"").append(thumb).append("\" alt=\"").append(name).append("\">");
+									mediaHtml.append("<span>").append(name).append("</span>");
+								mediaHtml.append("</a>").append(CRLF);
+							mediaHtml.append("</li>").append(CRLF);
+						}
+					}
+					sb.append("<div id=\"FoldersContainer\"><div><ul id=\"Folders\">").append(foldersHtml).append("</ul></div></div>");
+					if (mediaHtml.length() > 0) {
+						sb.append("<ul id=\"Media\">").append(mediaHtml).append("</ul>");
+					}
+				sb.append("</div>");
+			sb.append("</body>");
+		sb.append("</html>");
+
 		return sb.toString();
 	}
 

@@ -52,7 +52,7 @@ public class FFmpegAudio extends FFMpegVideo {
 
 	@Deprecated
 	public FFmpegAudio(PmsConfiguration configuration) {
-		super(configuration);
+		this();
 	}
 
 	public FFmpegAudio() {
@@ -74,9 +74,8 @@ public class FFmpegAudio extends FFMpegVideo {
 		cmp = (JComponent) cmp.getComponent(0);
 		cmp.setFont(cmp.getFont().deriveFont(Font.BOLD));
 
-		noresample = new JCheckBox(Messages.getString("TrTab2.22"));
+		noresample = new JCheckBox(Messages.getString("TrTab2.22"), configuration.isAudioResample());
 		noresample.setContentAreaFilled(false);
-		noresample.setSelected(configuration.isAudioResample());
 		noresample.addItemListener(new ItemListener() {
 			@Override
 			public void itemStateChanged(ItemEvent e) {
@@ -141,7 +140,21 @@ public class FFmpegAudio extends FFMpegVideo {
 		params.waitbeforestart = 2000;
 		params.manageFastStart();
 
-		int nThreads = configuration.getNumberOfCpuCores();
+		/*
+		 * FFmpeg uses multithreading by default, so provided that the
+		 * user has not disabled FFmpeg multithreading and has not
+		 * chosen to use more or less threads than are available, do not
+		 * specify how many cores to use.
+		 */
+		int nThreads = 1;
+		if (configuration.isFfmpegMultithreading()) {
+			if (Runtime.getRuntime().availableProcessors() == configuration.getNumberOfCpuCores()) {
+				nThreads = 0;
+			} else {
+				nThreads = configuration.getNumberOfCpuCores();
+			}
+		}
+
 		List<String> cmdList = new ArrayList<>();
 
 		cmdList.add(executable());
@@ -159,16 +172,20 @@ public class FFmpegAudio extends FFMpegVideo {
 			cmdList.add("" + params.timeseek);
 		}
 
-		// decoder threads
-		cmdList.add("-threads");
-		cmdList.add("" + nThreads);
+		// Decoder threads
+		if (nThreads > 0) {
+			cmdList.add("-threads");
+			cmdList.add("" + nThreads);
+		}
 
 		cmdList.add("-i");
 		cmdList.add(filename);
 
-		// encoder threads
-		cmdList.add("-threads");
-		cmdList.add("" + nThreads);
+		// Encoder threads
+		if (nThreads > 0) {
+			cmdList.add("-threads");
+			cmdList.add("" + nThreads);
+		}
 
 		if (params.timeend > 0) {
 			cmdList.add("-t");

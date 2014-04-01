@@ -56,17 +56,17 @@ public class RootFolder extends DLNAResource {
 	private static final PmsConfiguration configuration = PMS.getConfiguration();
 	private boolean running;
 	private FolderLimit lim;
-	private String tag;
 	private MediaMonitor mon;
 	private RecentlyPlayed last;
+	private ArrayList<String> tags;
+
+	public RootFolder(ArrayList<String> tags) {
+		setIndexId(0);
+		this.tags = tags;
+	}
 
 	public RootFolder() {
 		this(null);
-	}
-
-	public RootFolder(String tag) {
-		this.tag = tag;
-		setIndexId(0);
 	}
 
 	@Override
@@ -105,12 +105,12 @@ public class RootFolder extends DLNAResource {
 			return;
 		}
 
-		if (!configuration.isHideRecentlyPlayedFolder()) {
+		if (!configuration.isHideRecentlyPlayedFolder(tags)) {
 			last = new RecentlyPlayed();
 			addChild(last);
 		}
 
-		if (!configuration.isHideNewMediaFolder()) {
+		if (!configuration.isHideNewMediaFolder(tags)) {
 			String m = (String) configuration.getFoldersMonitored();
 			if (!StringUtils.isEmpty(m)) {
 				String[] tmp = m.split(",");
@@ -128,24 +128,22 @@ public class RootFolder extends DLNAResource {
 			addChild(lim);
 		}
 
-		if (!configuration.getNoFolders(tag)) {
-			for (DLNAResource r : getConfiguredFolders()) {
-				addChild(r);
-			}
+		for (DLNAResource r : getConfiguredFolders(tags)) {
+			addChild(r);
+		}
 
-			for (DLNAResource r : getVirtualFolders()) {
-				addChild(r);
-			}
+		for (DLNAResource r : getVirtualFolders(tags)) {
+			addChild(r);
 		}
 
 		if (configuration.getSearchFolder()) {
-			SearchFolder sf = new SearchFolder("Search disc folders", new FileSearch(getConfiguredFolders()));
+			SearchFolder sf = new SearchFolder("Search disc folders", new FileSearch(getConfiguredFolders(null)));
 			addChild(sf);
 		}
 
 		String webConfPath = configuration.getWebConfPath();
 		File webConf = new File(webConfPath);
-		if (webConf.exists() && configuration.getExternalNetwork()) {
+		if (webConf.exists() && configuration.getExternalNetwork() && !configuration.isHideWebFolder(tags)) {
 			addWebFolder(webConf);
 		}
 
@@ -181,7 +179,7 @@ public class RootFolder extends DLNAResource {
 			addChild(r);
 		}
 
-		if (!configuration.getHideVideoSettings()) {
+		if (!configuration.getHideVideoSettings(tags)) {
 			addAdminFolder();
 		}
 
@@ -194,7 +192,7 @@ public class RootFolder extends DLNAResource {
 		}
 	}
 
-	public void scan() {
+	public synchronized void scan() {
 		running = true;
 
 		if (!isDiscovered()) {
@@ -217,7 +215,7 @@ public class RootFolder extends DLNAResource {
 		stopScan();
 	}
 
-	public void stopScan() {
+	public synchronized void stopScan() {
 		running = false;
 	}
 
@@ -261,10 +259,9 @@ public class RootFolder extends DLNAResource {
 		}
 	}
 
-	private List<RealFile> getConfiguredFolders() {
+	private List<RealFile> getConfiguredFolders(ArrayList<String> tags) {
 		List<RealFile> res = new ArrayList<>();
-		//File[] files = PMS.get().getFoldersConf(tag);
-		File[] files = PMS.get().getSharedFoldersArray(false);
+		File[] files = PMS.get().getSharedFoldersArray(false, tags);
 
 		if (files == null || files.length == 0) {
 			files = File.listRoots();
@@ -277,9 +274,9 @@ public class RootFolder extends DLNAResource {
 		return res;
 	}
 
-	private List<DLNAResource> getVirtualFolders() {
+	private List<DLNAResource> getVirtualFolders(ArrayList<String> tags) {
 		List<DLNAResource> res = new ArrayList<>();
-		List<MapFileConfiguration> mapFileConfs = MapFileConfiguration.parseVirtualFolders();
+		List<MapFileConfiguration> mapFileConfs = MapFileConfiguration.parseVirtualFolders(tags);
 
 		if (mapFileConfs != null) {
 			for (MapFileConfiguration f : mapFileConfs) {
@@ -298,9 +295,9 @@ public class RootFolder extends DLNAResource {
 					while ((line = br.readLine()) != null) {
 						line = line.trim();
 
-						if (line.length() > 0 && !line.startsWith("#") && line.indexOf("=") > -1) {
-							String key = line.substring(0, line.indexOf("="));
-							String value = line.substring(line.indexOf("=") + 1);
+						if (line.length() > 0 && !line.startsWith("#") && line.indexOf('=') > -1) {
+							String key = line.substring(0, line.indexOf('='));
+							String value = line.substring(line.indexOf('=') + 1);
 							String[] keys = parseFeedKey(key);
 
 							try {
@@ -349,6 +346,8 @@ public class RootFolder extends DLNAResource {
 											break;
 										case "videostream":
 											parent.addChild(new WebVideoStream(values[0], values[1], values[2]));
+											break;
+										default:
 											break;
 									}
 								}
@@ -515,7 +514,7 @@ public class RootFolder extends DLNAResource {
 						}
 
 						line = line.trim(); // remove extra spaces
-						line = line.substring(1, line.lastIndexOf("\"")); // remove quotes and spaces
+						line = line.substring(1, line.lastIndexOf('"')); // remove quotes and spaces
 						VirtualFolder apertureLibrary = createApertureDlnaLibrary(line);
 
 						if (apertureLibrary != null) {
@@ -580,8 +579,8 @@ public class RootFolder extends DLNAResource {
 			if (mediaPath != null) {
 				mediaName = mediaPath.toString();
 
-				if (mediaName != null && mediaName.lastIndexOf("/") != -1 && mediaName.lastIndexOf(".aplibrary") != -1) {
-					mediaName = mediaName.substring(mediaName.lastIndexOf("/"), mediaName.lastIndexOf(".aplibrary"));
+				if (mediaName != null && mediaName.lastIndexOf('/') != -1 && mediaName.lastIndexOf(".aplibrary") != -1) {
+					mediaName = mediaName.substring(mediaName.lastIndexOf('/'), mediaName.lastIndexOf(".aplibrary"));
 				} else {
 					mediaName = "unknown library";
 				}
@@ -669,6 +668,11 @@ public class RootFolder extends DLNAResource {
 	private String getiTunesFile() throws Exception {
 		String line;
 		String iTunesFile = null;
+		String customUserPath = configuration.getItunesLibraryPath();
+
+		if (!"".equals(customUserPath)) {
+			return customUserPath;
+		}
 
 		if (Platform.isMac()) {
 			// the second line should contain a quoted file URL e.g.:
@@ -698,7 +702,7 @@ public class RootFolder extends DLNAResource {
 
 			if (location != null) {
 				// Add the iTunes folder to the end
-				location = location + "\\iTunes\\iTunes Music Library.xml";
+				location += "\\iTunes\\iTunes Music Library.xml";
 				iTunesFile = location;
 			} else {
 				LOGGER.info("Could not find the My Music folder");
@@ -706,15 +710,6 @@ public class RootFolder extends DLNAResource {
 		}
 
 		return iTunesFile;
-	}
-
-	private String renameForSorting(String name) {
-		if (configuration.isIgnoreTheWordThe()) {
-			// Remove "The" from the beginning of files
-			name = name.replaceAll("^(?i)The[ .]", "");
-		}
-
-		return name;
 	}
 
 	private static boolean areNamesEqual(String aThis, String aThat) {
@@ -878,7 +873,7 @@ public class RootFolder extends DLNAResource {
 										// Put the track into its album folder
 										{
 											if (!isCompilation) {
-												albumName += " � " + artistName;
+												albumName += " - " + artistName;
 											}
 
 											VirtualFolder individualAlbumFolder = null;
@@ -1040,16 +1035,15 @@ public class RootFolder extends DLNAResource {
 					@Override
 					public void discoverChildren() {
 						File[] files = scriptDir.listFiles();
-
-						for (int i = 0; i < files.length; i++) {
-							String name = files[i].getName().replaceAll("_", " ");
-							int pos = name.lastIndexOf(".");
+						for (File file : files) {
+							String name = file.getName().replaceAll("_", " ");
+							int pos = name.lastIndexOf('.');
 
 							if (pos != -1) {
 								name = name.substring(0, pos);
 							}
 
-							final File f = files[i];
+							final File f = file;
 
 							addChild(new VirtualVideoAction(name, true) {
 								@Override
@@ -1148,7 +1142,7 @@ public class RootFolder extends DLNAResource {
 	private DLNAResource getVideoSettingsFolder() {
 		DLNAResource res = null;
 
-		if (!configuration.getHideVideoSettings()) {
+		if (!configuration.getHideVideoSettings(tags)) {
 			res = new VirtualFolder(Messages.getString("PMS.37"), null);
 			VirtualFolder vfSub = new VirtualFolder(Messages.getString("PMS.8"), null);
 			res.addChild(vfSub);
@@ -1271,13 +1265,16 @@ public class RootFolder extends DLNAResource {
 	 */
 	private List<DLNAResource> getAdditionalFoldersAtRoot() {
 		List<DLNAResource> res = new ArrayList<>();
+		String[] legalPlugs = null;
+		String tmp = configuration.getPlugins(tags);
+		if (StringUtils.isNotBlank(tmp)) {
+			legalPlugs = tmp.split(",");
+		}
 
-		String[] validPlugins = configuration.getPlugins(tag);
 		for (ExternalListener listener : ExternalFactory.getExternalListeners()) {
-			if (validPlugins != null) {
-				if (Arrays.binarySearch(validPlugins, listener.name()) < 0) {
-					continue;
-				}
+			if (illegalPlugin(legalPlugs, listener.name())) {
+				LOGGER.debug("plugin " + listener.name() + " is not legal for render");
+				continue;
 			}
 			if (listener instanceof AdditionalFolderAtRoot) {
 				AdditionalFolderAtRoot afar = (AdditionalFolderAtRoot) listener;
@@ -1333,5 +1330,28 @@ public class RootFolder extends DLNAResource {
 		if (last != null) {
 			last.add(res);
 		}
+	}
+
+	private boolean illegalPlugin(String[] plugs, String name) {
+		if (StringUtils.isBlank(name)) {
+			if (plugs == null || plugs.length == 0) {
+				// only allowed without plugins filter
+				return false;
+			}
+			return true;
+		}
+		if (plugs == null || plugs.length == 0) {
+			return false;
+		}
+		for (String p : plugs) {
+			if (name.equals(p)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	public ArrayList<String> getTags() {
+		return tags;
 	}
 }

@@ -75,6 +75,7 @@ public class TranscodingTab {
 	private JTextField abitrate;
 	private JTree tree;
 	private JCheckBox forcePCM;
+	private JCheckBox encodedAudioPassthrough;
 	public static JCheckBox forceDTSinPCM;
 	private JComboBox channels;
 	private JComboBox vq;
@@ -358,7 +359,6 @@ public class TranscodingTab {
 			tree.expandRow(i);
 		}
 
-
 		tree.setSelectionRow(0);
 	}
 
@@ -394,7 +394,7 @@ public class TranscodingTab {
 		cmp = (JComponent) cmp.getComponent(0);
 		cmp.setFont(cmp.getFont().deriveFont(Font.BOLD));
 
-		disableSubs = new JCheckBox(Messages.getString("TrTab2.51"),configuration.isDisableSubtitles());
+		disableSubs = new JCheckBox(Messages.getString("TrTab2.51"), configuration.isDisableSubtitles());
 		disableSubs.setContentAreaFilled(false);
  		disableSubs.addItemListener(new ItemListener() {
 			@Override
@@ -508,7 +508,8 @@ public class TranscodingTab {
 		builder.add(videoHWacceleration, FormLayoutUtil.flip(cc.xy(1, 2), colSpec, orientation));
 		videoHWacceleration.setEnabled(false);
 
-		mpeg2remux = new JCheckBox(Messages.getString("MEncoderVideo.39") + (Platform.isWindows() ? " " + Messages.getString("TrTab2.21") : ""), configuration.isMencoderRemuxMPEG2());
+		mpeg2remux = new JCheckBox(Messages.getString("MEncoderVideo.39"), configuration.isMencoderRemuxMPEG2());
+		mpeg2remux.setToolTipText(Messages.getString("TrTab2.82") + (Platform.isWindows() ? " " + Messages.getString("TrTab2.21") : "") + "</html>");
 		mpeg2remux.setContentAreaFilled(false);
 		mpeg2remux.addItemListener(new ItemListener() {
 			@Override
@@ -516,7 +517,7 @@ public class TranscodingTab {
 				configuration.setMencoderRemuxMPEG2((e.getStateChange() == ItemEvent.SELECTED));
 			}
 		});
-		builder.add(mpeg2remux, FormLayoutUtil.flip(cc.xyw(1, 6, 3), colSpec, orientation));
+		builder.add(mpeg2remux, FormLayoutUtil.flip(cc.xy(1, 6), colSpec, orientation));
 
 		JComponent cmp = builder.addSeparator(Messages.getString("TrTab2.7"), FormLayoutUtil.flip(cc.xyw(1, 8, 3), colSpec, orientation));
 		cmp = (JComponent) cmp.getComponent(0);
@@ -525,8 +526,8 @@ public class TranscodingTab {
 		builder.add(new JLabel(Messages.getString("TrTab2.32")), FormLayoutUtil.flip(cc.xy(1, 10), colSpec, orientation));
 		Object data[] = new Object[] {
 			configuration.getMPEG2MainSettings(),                                                   /* current setting */
-			String.format("Automatic (Wired)  /* %s */", Messages.getString("TrTab2.71")),
-			String.format("Automatic (Wireless)  /* %s */", Messages.getString("TrTab2.72")),
+			String.format("Automatic (Wired)  /* %s */",          Messages.getString("TrTab2.71")),
+			String.format("Automatic (Wireless)  /* %s */",       Messages.getString("TrTab2.72")),
 			String.format("keyint=5:vqscale=1:vqmin=2  /* %s */", Messages.getString("TrTab2.60")), /* great */
 			String.format("keyint=5:vqscale=1:vqmin=1  /* %s */", Messages.getString("TrTab2.61")), /* lossless */
 			String.format("keyint=5:vqscale=2:vqmin=3  /* %s */", Messages.getString("TrTab2.62")), /* good (wired) */
@@ -618,7 +619,7 @@ public class TranscodingTab {
 
 	private JComponent buildAudioSetupPanel() {
 		String colSpec = FormLayoutUtil.getColSpec("left:pref, 3dlu, pref:grow", orientation);
-		FormLayout layout = new FormLayout(colSpec, "$lgap, pref, 3dlu, 4*(pref, 3dlu), pref, 12dlu, 3*(pref, 3dlu), pref:grow");
+		FormLayout layout = new FormLayout(colSpec, "$lgap, pref, 3dlu, 5*(pref, 3dlu), pref, 12dlu, 3*(pref, 3dlu), pref:grow");
 		PanelBuilder builder = new PanelBuilder(layout);
 		builder.border(Borders.DLU4);
 		CellConstraints cc = new CellConstraints();
@@ -641,6 +642,7 @@ public class TranscodingTab {
 		builder.add(channels, FormLayoutUtil.flip(cc.xy(3, 2), colSpec, orientation));
 
 		forcePCM = new JCheckBox(Messages.getString("TrTab2.27"), configuration.isAudioUsePCM());
+		forcePCM.setToolTipText(Messages.getString("TrTab2.83"));
 		forcePCM.setContentAreaFilled(false);
 		forcePCM.addItemListener(new ItemListener() {
 			@Override
@@ -650,38 +652,47 @@ public class TranscodingTab {
 		});
 		builder.add(forcePCM, FormLayoutUtil.flip(cc.xy(1, 4), colSpec, orientation));
 
-		ac3remux = new JCheckBox(Messages.getString("TrTab2.26") + " " + (Platform.isWindows() ? Messages.getString("TrTab2.21") : ""));
-
-		if (configuration.isAudioRemuxAC3()) {
-			ac3remux.setSelected(true);
+		ac3remux = new JCheckBox(Messages.getString("TrTab2.26"), configuration.isAudioRemuxAC3());
+		ac3remux.setToolTipText(Messages.getString("TrTab2.84") + (Platform.isWindows() ? " " + Messages.getString("TrTab2.21") : "") + "</html>");
+		if (configuration.isEncodedAudioPassthrough()) {
+			ac3remux.setEnabled(false);
 		}
-
 		ac3remux.addItemListener(new ItemListener() {
 			@Override
 			public void itemStateChanged(ItemEvent e) {
 				configuration.setAudioRemuxAC3((e.getStateChange() == ItemEvent.SELECTED));
 			}
 		});
-		builder.add(ac3remux, FormLayoutUtil.flip(cc.xyw(1, 6, 3), colSpec, orientation));
+		builder.add(ac3remux, FormLayoutUtil.flip(cc.xy(1, 6), colSpec, orientation));
 
-		forceDTSinPCM = new JCheckBox(Messages.getString("TrTab2.28") + (Platform.isWindows() ? " " + Messages.getString("TrTab2.21") : ""), configuration.isAudioEmbedDtsInPcm());
+		forceDTSinPCM = new JCheckBox(Messages.getString("TrTab2.28"), configuration.isAudioEmbedDtsInPcm());
+		forceDTSinPCM.setToolTipText(Messages.getString("TrTab2.85") + (Platform.isWindows() ? " " + Messages.getString("TrTab2.21") : "") + "</html>");
+		if (configuration.isEncodedAudioPassthrough()) {
+			forceDTSinPCM.setEnabled(false);
+		}
 		forceDTSinPCM.setContentAreaFilled(false);
 		forceDTSinPCM.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
 				configuration.setAudioEmbedDtsInPcm(forceDTSinPCM.isSelected());
-				if (configuration.isAudioEmbedDtsInPcm()) {
-					JOptionPane.showMessageDialog(
-						(JFrame) (SwingUtilities.getWindowAncestor((Component) PMS.get().getFrame())),
-						Messages.getString("TrTab2.10"),
-						Messages.getString("Dialog.Information"),
-						JOptionPane.INFORMATION_MESSAGE);
-				}
 			}
 		});
-		builder.add(forceDTSinPCM, FormLayoutUtil.flip(cc.xyw(1, 8, 3), colSpec, orientation));
+		builder.add(forceDTSinPCM, FormLayoutUtil.flip(cc.xy(1, 8), colSpec, orientation));
 
-		builder.addLabel(Messages.getString("TrTab2.29"), FormLayoutUtil.flip(cc.xy(1, 10), colSpec, orientation));
+		encodedAudioPassthrough = new JCheckBox(Messages.getString("TrTab2.53"), configuration.isEncodedAudioPassthrough());
+		encodedAudioPassthrough.setToolTipText(Messages.getString("TrTab2.86") + (Platform.isWindows() ? " " + Messages.getString("TrTab2.21") : "") + "</html>");
+		encodedAudioPassthrough.setContentAreaFilled(false);
+		encodedAudioPassthrough.addItemListener(new ItemListener() {
+			@Override
+			public void itemStateChanged(ItemEvent e) {
+				configuration.setEncodedAudioPassthrough((e.getStateChange() == ItemEvent.SELECTED));
+				ac3remux.setEnabled((e.getStateChange() != ItemEvent.SELECTED));
+				forceDTSinPCM.setEnabled((e.getStateChange() != ItemEvent.SELECTED));
+			}
+		});
+		builder.add(encodedAudioPassthrough, cc.xyw(1, 10, 3));
+
+		builder.addLabel(Messages.getString("TrTab2.29"), FormLayoutUtil.flip(cc.xy(1, 12), colSpec, orientation));
 		abitrate = new JTextField("" + configuration.getAudioBitrate());
 		abitrate.addKeyListener(new KeyAdapter() {
 			@Override
@@ -694,9 +705,9 @@ public class TranscodingTab {
 				}
 			}
 		});
-		builder.add(abitrate, FormLayoutUtil.flip(cc.xy(3, 10), colSpec, orientation));
+		builder.add(abitrate, FormLayoutUtil.flip(cc.xy(3, 12), colSpec, orientation));
 
-		builder.addLabel(Messages.getString("MEncoderVideo.7"), FormLayoutUtil.flip(cc.xy(1, 12), colSpec, orientation));
+		builder.addLabel(Messages.getString("MEncoderVideo.7"), FormLayoutUtil.flip(cc.xy(1, 14), colSpec, orientation));
 		langs = new JTextField(configuration.getAudioLanguages());
 		langs.setToolTipText(Messages.getString("TrTab2.75"));
 		langs.addKeyListener(new KeyAdapter() {
@@ -705,7 +716,7 @@ public class TranscodingTab {
 				configuration.setAudioLanguages(langs.getText());
 			}
 		});
-		builder.add(langs, FormLayoutUtil.flip(cc.xy(3, 12), colSpec, orientation));
+		builder.add(langs, FormLayoutUtil.flip(cc.xy(3, 14), colSpec, orientation));
 
 		JPanel panel = builder.getPanel();
 		panel.applyComponentOrientation(orientation);
@@ -854,13 +865,8 @@ public class TranscodingTab {
 		subtitleCodePage.setEditable(true);
 		builder.add(subtitleCodePage, FormLayoutUtil.flip(cc.xyw(3, 8, 7), colSpec, orientation));
 
-		fribidi = new JCheckBox(Messages.getString("MEncoderVideo.23"));
+		fribidi = new JCheckBox(Messages.getString("MEncoderVideo.23"), configuration.isMencoderSubFribidi());
 		fribidi.setContentAreaFilled(false);
-
-		if (configuration.isMencoderSubFribidi()) {
-			fribidi.setSelected(true);
-		}
-
 		fribidi.addItemListener(new ItemListener() {
 			@Override
 			public void itemStateChanged(ItemEvent e) {

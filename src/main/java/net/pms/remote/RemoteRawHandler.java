@@ -17,7 +17,6 @@ import org.slf4j.LoggerFactory;
 
 public class RemoteRawHandler implements HttpHandler {
 	private static final Logger LOGGER = LoggerFactory.getLogger(RemoteRawHandler.class);
-	private final static String CRLF = "\r\n";
 	private RemoteWeb parent;
 
 	public RemoteRawHandler(RemoteWeb parent) {
@@ -30,7 +29,7 @@ public class RemoteRawHandler implements HttpHandler {
 		if (RemoteUtil.deny(t)) {
 			throw new IOException("Access denied");
 		}
-		RootFolder root = parent.getRoot(t.getPrincipal().getUsername());
+		RootFolder root = parent.getRoot(RemoteUtil.userName(t));
 		if (root == null) {
 			throw new IOException("Unknown root");
 		}

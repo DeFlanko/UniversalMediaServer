@@ -29,9 +29,11 @@ import java.util.Map.Entry;
 import java.util.logging.LogManager;
 import javax.swing.*;
 import net.pms.configuration.Build;
+import net.pms.configuration.NameFilter;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
 import net.pms.dlna.DLNAMediaDatabase;
+import net.pms.dlna.DLNAResource;
 import net.pms.dlna.RootFolder;
 import net.pms.dlna.virtual.MediaLibrary;
 import net.pms.encoders.Player;
@@ -99,6 +101,8 @@ public class PMS {
 	 * directory.
 	 */
 	private static String helpPage = "index.html";
+
+	private NameFilter filter;
 
 	/**
 	 * Returns a pointer to the PMS GUI's main window.
@@ -213,69 +217,6 @@ public class PMS {
 	}
 
 	/**
-	 * Executes a new Process and creates a fork that waits for its results.
-	 * TODO Extend explanation on where this is being used.
-	 * @param name Symbolic name for the process to be launched, only used in the trace log
-	 * @param error (boolean) Set to true if you want PMS to add error messages to the trace pane
-	 * @param workDir (File) optional working directory to run the process in
-	 * @param params (array of Strings) array containing the command to call and its arguments
-	 * @return Returns true if the command exited as expected
-	 * @throws Exception TODO: Check which exceptions to use
-	 */
-	private boolean checkProcessExistence(String name, boolean error, File workDir, String... params) throws Exception {
-		LOGGER.debug("Launching: " + params[0]);
-
-		try {
-			ProcessBuilder pb = new ProcessBuilder(params);
-
-			if (workDir != null) {
-				pb.directory(workDir);
-			}
-
-			final Process process = pb.start();
-
-			OutputTextConsumer stderrConsumer = new OutputTextConsumer(process.getErrorStream(), false);
-			stderrConsumer.start();
-
-			OutputTextConsumer outConsumer = new OutputTextConsumer(process.getInputStream(), false);
-			outConsumer.start();
-
-			Runnable r = new Runnable() {
-				@Override
-				public void run() {
-					ProcessUtil.waitFor(process);
-				}
-			};
-
-			Thread checkThread = new Thread(r, "PMS Checker");
-			checkThread.start();
-			checkThread.join(60000);
-			checkThread.interrupt();
-			checkThread = null;
-
-			try {
-				int exit = process.exitValue();
-				if (exit != 0) {
-					if (error) {
-						LOGGER.info("[" + exit + "] Cannot launch " + name + ". Check the presence of " + params[0]);
-					}
-					return false;
-				}
-			} catch (IllegalThreadStateException ise) {
-				LOGGER.trace("Forcing shutdown of process: " + process);
-				ProcessUtil.destroy(process);
-			}
-
-			return true;
-		} catch (IOException | InterruptedException e) {
-			if (error) {
-				LOGGER.error("Cannot launch " + name + ". Check the presence of " + params[0], e);
-			}
-			return false;
-		}
-	}
-
-	/**
 	 * @see System#err
 	 */
 	@SuppressWarnings("unused")
@@ -287,7 +228,7 @@ public class PMS {
 	 */
 	private DLNAMediaDatabase database;
 
-	private void initializeDatabase() {
+	private synchronized void initializeDatabase() {
 		database = new DLNAMediaDatabase("medias"); // TODO: rename "medias" -> "cache"
 		database.init(false);
 	}
@@ -340,7 +281,7 @@ public class PMS {
 
 	private void displayBanner() throws IOException {
 		LOGGER.info("Starting " + PropertiesUtil.getProjectProperties().get("project.name") + " " + getVersion());
-		LOGGER.info("Based on PS3 Media Server by shagrath, copyright 2008-2013");
+		LOGGER.info("Based on PS3 Media Server by shagrath, copyright 2008-2014");
 		LOGGER.info("http://www.universalmediaserver.com");
 		LOGGER.info("");
 
@@ -366,7 +307,7 @@ public class PMS {
 		File javaTmpdir = new File(System.getProperty("java.io.tmpdir"));
 
 		if (!FileUtil.isDirectoryWritable(javaTmpdir)) {
-			LOGGER.error("The Java temp directory \"" + javaTmpdir.getAbsolutePath() + "\" is not writable for PMS!");
+			LOGGER.error("The Java temp directory \"" + javaTmpdir.getAbsolutePath() + "\" is not writable by UMS");
 			LOGGER.error("Please make sure the directory is writable for user \"" + System.getProperty("user.name") + "\"");
 			throw new IOException("Cannot write to Java temp directory");
 		}
@@ -415,6 +356,12 @@ public class PMS {
 
 		dbgPack = new DbgPacker();
 		tfm = new TempFileMgr();
+
+		try {
+			filter = new NameFilter();
+		} catch (ConfigurationException e) {
+			filter = null;
+		}
 
 		// This should be removed soon
 		OpenSubtitle.convert();
@@ -599,18 +546,29 @@ public class PMS {
 			}
 		});
 
-		frame.setStatusCode(0, Messages.getString("PMS.138"), "icon-status-connecting.png");
 		RendererConfiguration.loadRendererConfigurations(configuration);
 
-		LOGGER.info("Please wait while we check the MPlayer font cache, this can take a minute or so.");
+		LOGGER.info("Checking the fontconfig cache, this can take two minutes or so.");
 
-		checkProcessExistence("MPlayer", true, null, configuration.getMplayerPath(), "dummy");
+		OutputParams outputParams = new OutputParams(configuration);
+		// Prevent unwanted gui buffer artifacts (and runaway timers)
+		outputParams.hidebuffer = true;
+		// make sure buffer is destroyed
+		outputParams.cleanup = true;
 
-		if (Platform.isWindows()) {
-			checkProcessExistence("MPlayer", true, configuration.getTempFolder(), configuration.getMplayerPath(), "dummy");
+		ProcessWrapperImpl mplayer = new ProcessWrapperImpl(new String[]{configuration.getMplayerPath(), "dummy"}, outputParams);
+		mplayer.runInNewThread();
+
+		/**
+		 * Note: This can be needed in case MPlayer and FFmpeg have been
+		 * compiled with a different version of fontconfig.
+		 * Since it's unpredictable on Linux we should always run this
+		 * on Linux, but it may be possible to sync versions on OS X.
+		 */
+		if (!Platform.isWindows()) {
+			ProcessWrapperImpl ffmpeg = new ProcessWrapperImpl(new String[]{configuration.getFfmpegPath(), "-y", "-f", "lavfi", "-i", "nullsrc=s=720x480:d=1:r=1", "-vf", "ass=DummyInput.ass", "-target", "ntsc-dvd", "-"}, outputParams);
+			ffmpeg.runInNewThread();
 		}
-
-		LOGGER.info("Finished checking the MPlayer font cache.");
 
 		frame.setStatusCode(0, Messages.getString("PMS.130"), "icon-status-connecting.png");
 
@@ -728,8 +686,9 @@ public class PMS {
 			return false;
 		}
 
-/// Web stuff
+		// Web stuff
 		web = new RemoteWeb();
+
 		// initialize the cache
 		if (configuration.getUseCache()) {
 			initializeDatabase(); // XXX: this must be done *before* new MediaLibrary -> new MediaLibraryFolder
@@ -862,15 +821,18 @@ public class PMS {
 	 * Checks that the directory exists and is a valid directory.
 	 *
 	 * @return {@link java.io.File}[] Array of directories.
-	 * @throws java.io.IOException
 	 */
 	public File[] getSharedFoldersArray(boolean monitored) {
+		return getSharedFoldersArray(monitored, null);
+	}
+
+	public File[] getSharedFoldersArray(boolean monitored, ArrayList<String> tags) {
 		String folders;
 
 		if (monitored) {
 			folders = getConfiguration().getFoldersMonitored();
 		} else {
-			folders = getConfiguration().getFolders();
+			folders = getConfiguration().getFolders(tags);
 		}
 
 		if (folders == null || folders.length() == 0) {
@@ -909,12 +871,9 @@ public class PMS {
 		return f;
 	}
 
-
-
 	/**
 	 * Restarts the server. The trigger is either a button on the main PMS window or via
 	 * an action item.
-	 * @throws java.io.IOException
 	 */
 	// XXX: don't try to optimize this by reusing the same server instance.
 	// see the comment above HTTPServer.stop()
@@ -1092,8 +1051,8 @@ public class PMS {
 		boolean headless = true;
 
 		if (args.length > 0) {
-			for (int a = 0; a < args.length; a++) {
-				switch (args[a]) {
+			for (String arg : args) {
+				switch (arg) {
 					case CONSOLE:
 						System.setProperty(CONSOLE, Boolean.toString(true));
 						break;
@@ -1108,6 +1067,8 @@ public class PMS {
 						break;
 					case PROFILES:
 						displayProfileChooser = true;
+						break;
+					default:
 						break;
 				}
 			}
@@ -1124,7 +1085,7 @@ public class PMS {
 				headless = false;
 			}
 		} catch (Throwable t) {
-			System.err.println("Toolkit error: " + t.getClass().getName() + ": " + t.getMessage());
+			LOGGER.error("Toolkit error: " + t.getClass().getName() + ": " + t.getMessage());
 
 			if (System.getProperty(NOCONSOLE) == null) {
 				System.setProperty(CONSOLE, Boolean.toString(true));
@@ -1169,12 +1130,11 @@ public class PMS {
 				t.getMessage()
 			);
 
-			System.err.println(errorMessage);
-			t.printStackTrace();
+			LOGGER.error(errorMessage);
 
 			if (!headless && instance != null) {
 				JOptionPane.showMessageDialog(
-					((JFrame) (SwingUtilities.getWindowAncestor((Component) instance.getFrame()))),
+					(SwingUtilities.getWindowAncestor((Component) instance.getFrame())),
 					errorMessage,
 					Messages.getString("PMS.42"),
 					JOptionPane.ERROR_MESSAGE
@@ -1458,5 +1418,25 @@ public class PMS {
 	@Deprecated
 	public boolean isWindows() {
 		return Platform.isWindows();
+	}
+
+	public static boolean filter(RendererConfiguration render, DLNAResource res) {
+		NameFilter nf = instance.filter;
+		if (nf == null || render == null) {
+			return false;
+		}
+
+		ArrayList<String> tags = render.tags();
+		if (tags == null) {
+			return false;
+		}
+
+		for (String tag : tags) {
+			if (nf.filter(tag, res)) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 }

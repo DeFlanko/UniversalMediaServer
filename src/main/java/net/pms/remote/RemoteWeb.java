@@ -12,6 +12,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.security.KeyStore;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import javax.net.ssl.KeyManagerFactory;
@@ -20,9 +21,12 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManagerFactory;
 import net.pms.PMS;
+import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
+import net.pms.configuration.WebRender;
 import net.pms.dlna.DLNAResource;
 import net.pms.dlna.RootFolder;
+import org.apache.commons.configuration.ConfigurationException;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +42,7 @@ public class RemoteWeb {
 	private HashMap<String, String> users;
 	private HashMap<String, String> tags;
 	private HashMap<String, RootFolder> roots;
+	private static final PmsConfiguration configuration = PMS.getConfiguration();
 
 	public RemoteWeb() {
 		this(DEFAULT_PORT);
@@ -58,25 +63,28 @@ public class RemoteWeb {
 			// Setup the socket address
 			InetSocketAddress address = new InetSocketAddress(InetAddress.getByName("0.0.0.0"), port);
 
-            // initialise the HTTP(S) server
-            if (PMS.getConfiguration().getWebHttps())
-            	server = httpsServer(address);
-            else
-            	server = HttpServer.create(address, 0);
-          
-            // Add context handlers
-            addCtx("/", new RemoteStartHandler());
-            addCtx("/browse", new RemoteBrowseHandler(this));
-            addCtx("/play", new RemotePlayHandler(this));
-            addCtx("/media", new RemoteMediaHandler(this));
-            addCtx("/thumb", new RemoteThumbHandler(this));
-            addCtx("/raw", new RemoteRawHandler(this));
-            addCtx("/js", new RemoteFileHandler());
-            server.setExecutor(null);
-            server.start();
-        } catch ( Exception e ) {
-        	LOGGER.debug("Couldn't start RemoteWEB "+e);
-        }	
+			// initialise the HTTP(S) server
+			if (configuration.getWebHttps()) {
+				server = httpsServer(address);
+			} else {
+				server = HttpServer.create(address, 0);
+			}
+
+			// Add context handlers
+			addCtx("/", new RemoteStartHandler());
+			addCtx("/browse", new RemoteBrowseHandler(this));
+			addCtx("/play", new RemotePlayHandler(this));
+			addCtx("/media", new RemoteMediaHandler(this));
+			addCtx("/fmedia", new RemoteMediaHandler(this, true));
+			addCtx("/thumb", new RemoteThumbHandler(this));
+			addCtx("/raw", new RemoteRawHandler(this));
+			addCtx("/files", new RemoteFileHandler());
+			addCtx("/subs", new RemoteFileHandler());
+			server.setExecutor(null);
+			server.start();
+		} catch (Exception e) {
+			LOGGER.debug("Couldn't start RemoteWEB " + e);
+		}
 	}
 
 	private HttpServer httpsServer(InetSocketAddress address) throws Exception {
@@ -131,36 +139,63 @@ public class RemoteWeb {
 	}
 
 	public RootFolder getRoot(String name) {
-		return getRoot(name, false);
+		return getRoot(name, false, null);
 	}
 
-	public RootFolder getRoot(String name, boolean create) {
-		RootFolder root = roots.get(name);
+	public RootFolder getRoot(String name, boolean create, HttpExchange t) {
+		String groupTag = getTag(name);
+		RootFolder root = roots.get(groupTag);
 		if (!create || (root != null)) {
 			return root;
 		}
-		root = new RootFolder(getTag(name));
-		root.setDefaultRenderer(RendererConfiguration.getDefaultConf());
+		ArrayList<String> tag = new ArrayList<>();
+		tag.add(name);
+		if (!groupTag.equals(name)) {
+			tag.add(groupTag);
+		}
+		if (t != null) {
+			tag.add(t.getRemoteAddress().getHostString());
+		}
+		tag.add("web");
+		root = new RootFolder(tag);
+		try {
+			WebRender render = new WebRender(name);
+			root.setDefaultRenderer(render);
+			render.associateIP(t.getRemoteAddress().getAddress());
+			render.associatePort(t.getRemoteAddress().getPort());
+			render.setUA(t.getRequestHeaders().getFirst("User-agent"));
+			PMS.get().setRendererFound(render);
+		} catch (ConfigurationException e) {
+			root.setDefaultRenderer(RendererConfiguration.getDefaultConf());
+		}
 		//root.setDefaultRenderer(RendererConfiguration.getRendererConfigurationByName("web"));
 		root.discoverChildren();
-		roots.put(name, root);
+		roots.put(groupTag, root);
 		return root;
+	}
+
+	public void associate(HttpExchange t, RendererConfiguration r) {
+		WebRender wr = (WebRender) r;
+		wr.associateIP(t.getRemoteAddress().getAddress());
+		wr.associatePort(t.getRemoteAddress().getPort());
 	}
 
 	private void addCtx(String path, HttpHandler h) {
 		HttpContext ctx = server.createContext(path, h);
-		ctx.setAuthenticator(new BasicAuthenticator("") {
-			@Override
-			public boolean checkCredentials(String user, String pwd) {
-				LOGGER.debug("authenticate " + user + " pwd " + pwd);
-				//return pwd.equals(users.get(user));
-				return true;
-			}
-		});
+		if (configuration.isWebAuthenticate()) {
+			ctx.setAuthenticator(new BasicAuthenticator("") {
+				@Override
+				public boolean checkCredentials(String user, String pwd) {
+					LOGGER.debug("authenticate " + user);
+					return pwd.equals(users.get(user));
+					//return true;
+				}
+			});
+		}
 	}
 
 	private void readCred() throws IOException {
-		String cPath = (String) PMS.getConfiguration().getCustomProperty("cred.path");
+		String cPath = (String) configuration.getCustomProperty("cred.path");
 		if (StringUtils.isEmpty(cPath)) {
 			return;
 		}
@@ -195,6 +230,7 @@ public class RemoteWeb {
 				tags.put(s2[0], s1[1]);
 			}
 		}
+		in.close();
 	}
 
 	static class RemoteThumbHandler implements HttpHandler {
@@ -214,7 +250,7 @@ public class RemoteWeb {
 				RemoteUtil.sendLogo(t);
 				return;
 			}
-			RootFolder root = parent.getRoot(t.getPrincipal().getUsername());
+			RootFolder root = parent.getRoot(RemoteUtil.userName(t));
 			if (root == null) {
 				LOGGER.debug("weird root in thumb req");
 				throw new IOException("Unknown root");
@@ -256,22 +292,14 @@ public class RemoteWeb {
 				}
 				return;
 			}
-			if (t.getRequestURI().getPath().contains("player.swf")) {
-				LOGGER.debug("fetch player.swf");
-				Headers hdr = t.getResponseHeaders();
-				hdr.add("Accept-Ranges", "bytes");
-				hdr.add("Server", PMS.get().getServerName());
-				//hdr.add("Content-Type", "application/javascript; charset=utf-8");
-				RemoteUtil.dumpFile("player.swf", t);
+			if (t.getRequestURI().getPath().startsWith("/files/")) {
+				File f = configuration.getWebFile(t.getRequestURI().getPath().substring(7));
+				RemoteUtil.dumpFile(f, t);
 				return;
 			}
-			if (t.getRequestURI().getPath().contains("jwplayer.js")) {
-				LOGGER.debug("fetch jwplayer.js");
-				Headers hdr = t.getResponseHeaders();
-				hdr.add("Content-Type", "application/x-javascript");
-				hdr.add("Accept-Ranges", "bytes");
-				hdr.add("Server", PMS.get().getServerName());
-				RemoteUtil.dumpFile("jwplayer.js", t);
+			if (t.getRequestURI().getPath().startsWith("/subs/")) {
+				File f = new File(t.getRequestURI().getPath().substring(6));
+				RemoteUtil.dumpFile(f, t);
 			}
 		}
 	}
@@ -290,19 +318,29 @@ public class RemoteWeb {
 				RemoteUtil.sendLogo(t);
 				return;
 			}
+
+			// Front page HTML
 			StringBuilder sb = new StringBuilder();
-			sb.append("<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:og=\"http://opengraphprotocol.org/schema/\">");
-			sb.append(CRLF);
-			sb.append("<head><title>Universal Media Server</title></head><body>");
-			sb.append(CRLF);
-			sb.append("<h2><b>Universal Media Server</b></h2><br><br>");
-			sb.append(CRLF);
-			sb.append("<a href=\"/browse/0\"><img src=\"/thumb/logo\"/></a><br><br>");
-			sb.append(CRLF);
-			sb.append("<h2><b>");
-			sb.append(PMS.getConfiguration().getProfileName());
-			sb.append("</h2></b><br>");
-			sb.append("</body></html>");
+			sb.append("<!DOCTYPE html>").append(CRLF);
+				sb.append("<head>").append(CRLF);
+					sb.append("<link rel=\"stylesheet\" href=\"/files/reset.css\" type=\"text/css\" media=\"screen\">").append(CRLF);
+					sb.append("<link rel=\"stylesheet\" href=\"/files/web.css\" type=\"text/css\" media=\"screen\">").append(CRLF);
+					sb.append("<link rel=\"icon\" href=\"/files/favicon.ico\" type=\"image/x-icon\">").append(CRLF);
+					sb.append("<title>Universal Media Server</title>").append(CRLF);
+				sb.append("</head>").append(CRLF);
+				sb.append("<body id=\"FrontPage\">").append(CRLF);
+					sb.append("<div id=\"Container\">").append(CRLF);
+						sb.append("<div id=\"Menu\">").append(CRLF);
+							sb.append("<a href=\"/browse/0\" id=\"Logo\" title=\"Browse Media\">").append(CRLF);
+								sb.append("<h3>");
+									sb.append("Browse the media on ").append(configuration.getProfileName());
+								sb.append("</h3>");
+							sb.append("</a>").append(CRLF);
+						sb.append("</div>").append(CRLF);
+					sb.append("</div>");
+				sb.append("</body>");
+			sb.append("</html>");
+
 			String response = sb.toString();
 			t.sendResponseHeaders(200, response.length());
 			try (OutputStream os = t.getResponseBody()) {

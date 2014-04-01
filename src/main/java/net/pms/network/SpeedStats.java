@@ -54,7 +54,10 @@ public class SpeedStats {
 	/**
 	 * Return the network throughput for the given IP address in MBits. It is calculated in the background, and cached,
 	 * so only a reference is given to the result, which can be retrieved by calling the get() method on it.
+	 *
 	 * @param addr
+	 * @param rendererName
+	 *
 	 * @return  The network throughput
 	 */
 	public Future<Integer> getSpeedInMBits(InetAddress addr, String rendererName) {
@@ -75,7 +78,7 @@ public class SpeedStats {
 
 		public MeasureSpeed(InetAddress addr, String rendererName) {
 			this.addr = addr;
-			this.rendererName = rendererName != null ? rendererName : "Unknown";
+			this.rendererName = rendererName != null ? rendererName.replaceAll("\n", "") : "Unknown";
 		}
 
 		@Override
@@ -147,10 +150,10 @@ public class SpeedStats {
 				int msPos = line.indexOf("ms");
 
 				if (msPos > -1) {
-					if (line.lastIndexOf("<", msPos) > -1){
+					if (line.lastIndexOf('<', msPos) > -1){
 						timeString = "0.5";
 					} else {
-						timeString = line.substring(line.lastIndexOf("=", msPos) + 1, msPos).trim();
+						timeString = line.substring(line.lastIndexOf('=', msPos) + 1, msPos).trim();
 					}
 					try {
 						time += Double.parseDouble(timeString);
@@ -163,7 +166,7 @@ public class SpeedStats {
 			}
 
 			if (c > 0) {
-				time = time / c;
+				time /= c;
 			}
 
 			if (time > 0) {

@@ -13,21 +13,28 @@ import net.pms.dlna.DLNAResource;
 import net.pms.dlna.Range;
 import net.pms.dlna.RootFolder;
 import net.pms.encoders.WebPlayer;
+import net.pms.external.StartStopListenerDelegate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class RemoteMediaHandler implements HttpHandler {
 	private static final Logger LOGGER = LoggerFactory.getLogger(RemoteMediaHandler.class);
-	private final static String CRLF = "\r\n";
 	private RemoteWeb parent;
 	private String path;
 	private RendererConfiguration render;
+	private boolean flash;
 
 	public RemoteMediaHandler(RemoteWeb parent) {
 		this(parent, "media/", null);
 	}
 
+	public RemoteMediaHandler(RemoteWeb parent, boolean flash) {
+		this(parent, "fmedia/", null);
+		this.flash = flash;
+	}
+
 	public RemoteMediaHandler(RemoteWeb parent, String path, RendererConfiguration render) {
+		this.flash = false;
 		this.parent = parent;
 		this.path = path;
 		this.render = render;
@@ -38,7 +45,7 @@ public class RemoteMediaHandler implements HttpHandler {
 		if (RemoteUtil.deny(t)) {
 			throw new IOException("Access denied");
 		}
-		RootFolder root = parent.getRoot(t.getPrincipal().getUsername());
+		RootFolder root = parent.getRoot(RemoteUtil.userName(t));
 		if (root == null) {
 			throw new IOException("Unknown root");
 		}
@@ -56,14 +63,20 @@ public class RemoteMediaHandler implements HttpHandler {
 		}
 		long len = res.get(0).length();
 		Range range = RemoteUtil.parseRange(t.getRequestHeaders(), len);
-		Range.Byte rb = range.asByteRange();
 		String mime = root.getDefaultRenderer().getMimeType(res.get(0).mimeType());
-		if(res.get(0).getFormat().isVideo()&&!mime.equals("video/mp4")) {
-			mime = "video/mp4";
-			res.get(0).setPlayer(new WebPlayer());
+		DLNAResource dlna = res.get(0);
+		if (dlna.getFormat().isVideo()) {
+			if (flash) {
+				mime = "video/flash";
+				dlna.setPlayer(new WebPlayer(true));
+			} else if (!RemoteUtil.directmime(mime) || (dlna.getMediaSubtitle() != null)) {
+				mime = RemoteUtil.MIME_TRANS;
+				dlna.setPlayer(new WebPlayer());
+			}
 		}
+
 		LOGGER.debug("dumping media " + mime + " " + res);
-		InputStream in = res.get(0).getInputStream(range, root.getDefaultRenderer());
+		InputStream in = dlna.getInputStream(range, root.getDefaultRenderer());
 		Headers hdr = t.getResponseHeaders();
 		hdr.add("Content-Type", mime);
 		hdr.add("Accept-Ranges", "bytes");
@@ -71,6 +84,10 @@ public class RemoteMediaHandler implements HttpHandler {
 		hdr.add("Connection", "keep-alive");
 		t.sendResponseHeaders(200, 0);
 		OutputStream os = t.getResponseBody();
-		RemoteUtil.dump(in, os);
+		StartStopListenerDelegate startStop = new StartStopListenerDelegate(t.getRemoteAddress().getHostString());
+		PMS.get().getFrame().setStatusLine("Serving " + dlna.getName());
+		startStop.start(dlna);
+		RemoteUtil.dump(in, os, startStop);
+		PMS.get().getFrame().setStatusLine("");
 	}
 }

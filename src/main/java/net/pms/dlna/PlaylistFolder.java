@@ -2,6 +2,8 @@ package net.pms.dlna;
 
 import java.io.*;
 import java.util.ArrayList;
+import java.util.Collections;
+import net.pms.configuration.PmsConfiguration;
 import net.pms.PMS;
 import net.pms.formats.Format;
 import org.slf4j.Logger;
@@ -9,6 +11,7 @@ import org.slf4j.LoggerFactory;
 
 public class PlaylistFolder extends DLNAResource {
 	private static final Logger LOGGER = LoggerFactory.getLogger(PlaylistFolder.class);
+	private static final PmsConfiguration configuration = PMS.getConfiguration();
 	private File playlistfile;
 	private boolean valid = true;
 
@@ -76,7 +79,7 @@ public class PlaylistFolder extends DLNAResource {
 						line = line.trim();
 						if (pls) {
 							if (line.length() > 0 && !line.startsWith("#")) {
-								int eq = line.indexOf("=");
+								int eq = line.indexOf('=');
 								if (eq != -1) {
 									String value = line.substring(eq + 1);
 									String var = line.substring(0, eq).toLowerCase();
@@ -112,7 +115,7 @@ public class PlaylistFolder extends DLNAResource {
 							if (line.startsWith("#EXTINF:")) {
 								line = line.substring(8).trim();
 								if (line.matches("^-?\\d+,.+")) {
-									title = line.substring(line.indexOf(",") + 1).trim();
+									title = line.substring(line.indexOf(',') + 1).trim();
 								} else {
 									title = line;
 								}
@@ -152,6 +155,11 @@ public class PlaylistFolder extends DLNAResource {
 				}
 			}
 			PMS.get().storeFileInCache(playlistfile, Format.PLAYLIST);
+
+			if (configuration.getSortMethod() == 5) {
+				Collections.shuffle(getChildren());
+			}
+
 			for (DLNAResource r : getChildren()) {
 				r.resolve();
 			}

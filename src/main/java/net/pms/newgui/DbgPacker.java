@@ -17,6 +17,7 @@ import javax.swing.plaf.metal.MetalIconFactory;
 import net.pms.Messages;
 import net.pms.PMS;
 import net.pms.configuration.PmsConfiguration;
+import net.pms.configuration.RendererConfiguration;
 import net.pms.external.DebugPacker;
 import net.pms.external.ExternalFactory;
 import net.pms.external.ExternalListener;
@@ -67,8 +68,7 @@ public class DbgPacker implements ActionListener {
 			top.add(box, c);
 			CustomJButton open = exists ? new CustomJButton(MetalIconFactory.getTreeLeafIcon()) : new CustomJButton("+");
 			open.setActionCommand(file.getAbsolutePath());
-			open.setToolTipText((exists ? ""
-				: Messages.getString("DbgPacker.1") + " ") + file.getAbsolutePath());
+			open.setToolTipText((exists ? "" : Messages.getString("DbgPacker.1") + " ") + file.getAbsolutePath());
 			open.addActionListener(this);
 			c.gridx++;
 			c.weightx = 0.0;
@@ -105,18 +105,28 @@ public class DbgPacker implements ActionListener {
 			}
 		}
 		PmsConfiguration configuration = PMS.getConfiguration();
+
 		// check dbgpack property in UMS.conf
-		LOGGER.debug("checking dbgpack property in UMS.conf");
+		LOGGER.debug("Checking dbgpack property in UMS.conf");
 		String f = (String) configuration.getCustomProperty("dbgpack");
 		if (f != null) {
 			add(f.split(","));
 		}
+
+		// add confs of connected renderers
+		for (RendererConfiguration r : RendererConfiguration.getConnectedRenderersConfigurations()) {
+			add(r.getFile());
+		}
+
 		// add core items with debug.log last (LinkedHashMap preserves insertion order)
 		String profileDirectory = configuration.getProfileDirectory();
-		String vfolders = configuration.getVirtualFolders();
-		if (StringUtils.isNotEmpty(vfolders) && vfolders.startsWith("@")) {
-			add(new File(vfolders.substring(1)));
+
+		// add virtual folders file if it exists
+		String vfolders = configuration.getVirtualFoldersFile(null);
+		if (StringUtils.isNotEmpty(vfolders)) {
+			add(new File(profileDirectory, vfolders.substring(1)));
 		}
+
 		add(new File(profileDirectory, "WEB.conf"));
 		add(new File(configuration.getProfilePath()));
 		add(new File(debug_log + ".prev"));
@@ -218,7 +228,7 @@ public class DbgPacker implements ActionListener {
 		if (str.equals("pack")) {
 			packDbg();
 		} else {
-			// open
+			// Open
 			try {
 				File file = str.equals("showzip") ? new File(dbg_zip).getParentFile() : new File(str);
 				boolean exists = file.isFile() && file.exists();
@@ -230,17 +240,25 @@ public class DbgPacker implements ActionListener {
 					reload((JComponent) e.getSource());
 				}
 			} catch (IOException e1) {
-				LOGGER.debug(String.format("Failed to open '%s' in default desktop application %s", str, e1));
+				LOGGER.debug("Failed to open default desktop application: " + e1);
 			}
 		}
 	}
 
 	private void reload(JComponent c) {
-		// rebuild and restart
+		// Rebuild and restart
 		LOGGER.debug("reloading.");
 		init = true;
 		((Window) c.getTopLevelAncestor()).dispose();
-		JOptionPane.showOptionDialog((JFrame) (SwingUtilities.getWindowAncestor((Component) PMS.get().getFrame())),
-			config(), "Options", JOptionPane.CLOSED_OPTION, JOptionPane.PLAIN_MESSAGE, null, null, null);
+		JOptionPane.showOptionDialog(
+			(JFrame) (SwingUtilities.getWindowAncestor((Component) PMS.get().getFrame())),
+			config(),
+			"Options",
+			JOptionPane.CLOSED_OPTION,
+			JOptionPane.PLAIN_MESSAGE,
+			null,
+			null,
+			null
+		);
 	}
 }

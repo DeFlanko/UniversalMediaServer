@@ -115,15 +115,15 @@ public class DVDISOTitle extends DLNAResource {
 		if (lines != null) {
 			for (String line : lines) {
 				if (line.startsWith("DVD start=")) {
-					nbsectors = Integer.parseInt(line.substring(line.lastIndexOf("=") + 1).trim());
+					nbsectors = Integer.parseInt(line.substring(line.lastIndexOf('=') + 1).trim());
 				}
 				if (line.startsWith("audio stream:")) {
 					DLNAMediaAudio lang = new DLNAMediaAudio();
-					lang.setId(Integer.parseInt(line.substring(line.indexOf("aid: ") + 5, line.lastIndexOf(".")).trim()));
+					lang.setId(Integer.parseInt(line.substring(line.indexOf("aid: ") + 5, line.lastIndexOf('.')).trim()));
 					lang.setLang(line.substring(line.indexOf("language: ") + 10, line.lastIndexOf(" aid")).trim());
 					int end = line.lastIndexOf(" langu");
-					if (line.lastIndexOf("(") < end && line.lastIndexOf("(") > line.indexOf("format: ")) {
-						end = line.lastIndexOf("(");
+					if (line.lastIndexOf('(') < end && line.lastIndexOf('(') > line.indexOf("format: ")) {
+						end = line.lastIndexOf('(');
 					}
 					lang.setCodecA(line.substring(line.indexOf("format: ") + 8, end).trim());
 					if (line.contains("(stereo)")) {
@@ -280,7 +280,7 @@ public class DVDISOTitle extends DLNAResource {
 	public long length(RendererConfiguration mediaRenderer) {
 		// WDTV Live at least, needs a realistic size for stop/resume to works proberly. 2030879 = ((15000 + 256) * 1024 / 8 * 1.04) : 1.04 = overhead
 		int cbr_video_bitrate = getDefaultRenderer().getCBRVideoBitrate();
-		return (cbr_video_bitrate > 0) ? (long) (((cbr_video_bitrate + 256) * 1024 / 8 * 1.04) * getMedia().getDurationInSeconds()) : length();
+		return (cbr_video_bitrate > 0) ? (long) (((cbr_video_bitrate + 256) * 1024 / (double) 8 * 1.04) * getMedia().getDurationInSeconds()) : length();
 	}
 
 	@Override

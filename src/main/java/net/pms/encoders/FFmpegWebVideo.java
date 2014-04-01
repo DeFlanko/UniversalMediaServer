@@ -33,10 +33,12 @@ import net.pms.dlna.DLNAMediaInfo;
 import net.pms.dlna.DLNAResource;
 import net.pms.external.ExternalFactory;
 import net.pms.external.URLResolver.URLResult;
+import net.pms.formats.Format;
 import net.pms.io.OutputParams;
 import net.pms.io.PipeProcess;
 import net.pms.io.ProcessWrapper;
 import net.pms.io.ProcessWrapperImpl;
+import net.pms.io.OutputTextLogger;
 import net.pms.util.PlayerUtil;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.LineIterator;
@@ -87,28 +89,17 @@ public class FFmpegWebVideo extends FFMpegVideo {
 
 	@Deprecated
 	public FFmpegWebVideo(PmsConfiguration configuration) {
-		super(configuration);
-		
-		if (!init) {
-			readWebFilters(configuration.getProfileDirectory() + File.separator + "ffmpeg.webfilters");
-
-			protocols = FFmpegOptions.getSupportedProtocols(configuration);
-			// see XXX workaround below
-			protocols.add("mms");
-			protocols.add("https");
-			LOGGER.debug("FFmpeg supported protocols: " + protocols);
-			init = true;
-		}
+		this();
 	}
 	
 	public FFmpegWebVideo() {
 		if (!init) {
 			readWebFilters(configuration.getProfileDirectory() + File.separator + "ffmpeg.webfilters");
-
 			protocols = FFmpegOptions.getSupportedProtocols(configuration);
-			// see XXX workaround below
-			protocols.add("mms");
-			protocols.add("https");
+			if (protocols.contains("mmsh")) {
+				// see XXX workaround below
+				protocols.add("mms");
+			}
 			LOGGER.debug("FFmpeg supported protocols: " + protocols);
 			init = true;
 		}
@@ -224,11 +215,26 @@ public class FFmpegWebVideo extends FFMpegVideo {
 			cmdList.add("warning");
 		}
 
-		int nThreads = configuration.getNumberOfCpuCores();
+		/*
+		 * FFmpeg uses multithreading by default, so provided that the
+		 * user has not disabled FFmpeg multithreading and has not
+		 * chosen to use more or less threads than are available, do not
+		 * specify how many cores to use.
+		 */
+		int nThreads = 1;
+		if (configuration.isFfmpegMultithreading()) {
+			if (Runtime.getRuntime().availableProcessors() == configuration.getNumberOfCpuCores()) {
+				nThreads = 0;
+			} else {
+				nThreads = configuration.getNumberOfCpuCores();
+			}
+		}
 
 		// Decoder threads
-		cmdList.add("-threads");
-		cmdList.add("" + nThreads);
+		if (nThreads > 0) {
+			cmdList.add("-threads");
+			cmdList.add("" + nThreads);
+		}
 
 		// Add global and input-file custom options, if any
 		if (!customOptions.isEmpty()) {
@@ -247,8 +253,10 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		cmdList.addAll(getVideoFilterOptions(dlna, media, params));
 
 		// Encoder threads
-		cmdList.add("-threads");
-		cmdList.add("" + nThreads);
+		if (nThreads > 0) {
+			cmdList.add("-threads");
+			cmdList.add("" + nThreads);
+		}
 
 		// Add the output options (-f, -c:a, -c:v, etc.)
 		cmdList.addAll(getVideoTranscodeOptions(dlna, media, params));
@@ -282,6 +290,7 @@ public class FFmpegWebVideo extends FFMpegVideo {
 
 		// Now launch FFmpeg
 		ProcessWrapperImpl pw = new ProcessWrapperImpl(cmdArray, params);
+		parseMediaInfo(filename, dlna, pw); // Better late than never
 		pw.attachProcess(mkfifo_process); // Clean up the mkfifo process when the transcode ends
 
 		// Give the mkfifo process a little time
@@ -357,6 +366,36 @@ public class FFmpegWebVideo extends FFMpegVideo {
 			LOGGER.debug("Error reading ffmpeg web filters: " + e.getLocalizedMessage());
 		}
 		return false;
+	}
+
+	static final Matcher endOfHeader = Pattern.compile("Press \\[q\\]|A-V:|At least|Invalid").matcher("");
+
+	/**
+	 * Parse media info from ffmpeg headers during playback
+	 */
+	public void parseMediaInfo(String filename, final DLNAResource dlna, final ProcessWrapperImpl pw) {
+		if (dlna.getMedia() == null) {
+			dlna.setMedia(new DLNAMediaInfo());
+		} else if (dlna.getMedia().isFFmpegparsed()) {
+			return;
+		}
+		final ArrayList<String> lines = new ArrayList<String>();
+		final String input = filename.length() > 200 ? filename.substring(0, 199) : filename;
+		OutputTextLogger ffParser = new OutputTextLogger(null, pw) {
+			@Override
+			public boolean filter(String line) {
+				if (endOfHeader.reset(line).find()) {
+					dlna.getMedia().parseFFmpegInfo(lines, input);
+					LOGGER.trace("[{}] parsed media from headers: {}", ID, dlna.getMedia());
+					dlna.getParent().updateChild(dlna);
+					return false; // done, stop filtering
+				}
+				lines.add(line);
+				return true; // keep filtering
+			}
+		};
+		ffParser.setFiltered(true);
+		pw.setStderrConsumer(ffParser);
 	}
 }
 

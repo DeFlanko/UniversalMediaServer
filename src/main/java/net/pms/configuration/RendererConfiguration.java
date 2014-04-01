@@ -5,6 +5,7 @@ import java.io.File;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -47,6 +48,11 @@ public class RendererConfiguration {
 	private final Map<String, String> charMap;
 	private final Map<String, String> DLNAPN;
 
+	// TextWrap parameters
+	protected int line_w, line_h, indent;
+	protected String inset;
+	protected boolean dc_date = true;
+
 	// property values
 	private static final String DEPRECATED_MPEGPSAC3 = "MPEGAC3"; // XXX deprecated: old name with missing container
 	private static final String LPCM = "LPCM";
@@ -62,7 +68,9 @@ public class RendererConfiguration {
 	private static final String AUTO_EXIF_ROTATE = "AutoExifRotate";
 	private static final String BYTE_TO_TIMESEEK_REWIND_SECONDS = "ByteToTimeseekRewindSeconds"; // Ditlew
 	private static final String CBR_VIDEO_BITRATE = "CBRVideoBitrate"; // Ditlew
+	private static final String CHARMAP = "CharMap";
 	private static final String CHUNKED_TRANSFER = "ChunkedTransfer";
+	private static final String CUSTOM_FFMPEG_OPTIONS = "CustomFFmpegOptions";
 	private static final String CUSTOM_MENCODER_OPTIONS = "CustomMencoderOptions";
 	private static final String CUSTOM_MENCODER_MPEG2_OPTIONS = "CustomMencoderQualitySettings"; // TODO (breaking change): value should be CustomMEncoderMPEG2Options
 	private static final String DEFAULT_VBV_BUFSIZE = "DefaultVBVBufSize";
@@ -74,6 +82,7 @@ public class RendererConfiguration {
 	private static final String FORCE_JPG_THUMBNAILS = "ForceJPGThumbnails"; // Sony devices require JPG thumbnails
 	private static final String H264_L41_LIMITED = "H264Level41Limited";
 	private static final String IMAGE = "Image";
+	private static final String IGNORE_TRANSCODE_BYTE_RANGE_REQUEST = "IgnoreTranscodeByteRangeRequests";
 	private static final String KEEP_ASPECT_RATIO = "KeepAspectRatio";
 	private static final String MAX_VIDEO_BITRATE = "MaxVideoBitrateMbps";
 	private static final String MAX_VIDEO_HEIGHT = "MaxVideoHeight";
@@ -84,6 +93,7 @@ public class RendererConfiguration {
 	private static final String MUX_DTS_TO_MPEG = "MuxDTSToMpeg";
 	private static final String MUX_H264_WITH_MPEGTS = "MuxH264ToMpegTS";
 	private static final String MUX_LPCM_TO_MPEG = "MuxLPCMToMpeg";
+	private static final String OVERRIDE_VF = "OverrideVideoFilter";
 	private static final String RENDERER_ICON = "RendererIcon";
 	private static final String RENDERER_NAME = "RendererName";
 	private static final String RESCALE_BY_RENDERER = "RescaleByRenderer";
@@ -94,6 +104,8 @@ public class RendererConfiguration {
 	private static final String STREAM_EXT = "StreamExtensions";
 	private static final String SUBTITLE_HTTP_HEADER = "SubtitleHttpHeader";
 	private static final String SUPPORTED = "Supported";
+	private static final String SUPPORTED_SUBTITLES_TYPE = "SupportedSubtitlesType";
+	private static final String TEXTWRAP = "TextWrap";
 	private static final String THUMBNAIL_AS_RESOURCE = "ThumbnailAsResource";
 	private static final String TRANSCODE_AUDIO_441KHZ = "TranscodeAudioTo441kHz";
 	private static final String TRANSCODE_AUDIO = "TranscodeAudio";
@@ -105,13 +117,11 @@ public class RendererConfiguration {
 	private static final String USER_AGENT_ADDITIONAL_HEADER = "UserAgentAdditionalHeader";
 	private static final String USER_AGENT_ADDITIONAL_SEARCH = "UserAgentAdditionalHeaderSearch";
 	private static final String USER_AGENT = "UserAgentSearch";
+	private static final String USE_CLOSED_CAPTION = "UseClosedCaption";
 	private static final String USE_SAME_EXTENSION = "UseSameExtension";
 	private static final String VIDEO = "Video";
 	private static final String WRAP_DTS_INTO_PCM = "WrapDTSIntoPCM";
-	private static final String CUSTOM_FFMPEG_OPTIONS = "CustomFFmpegOptions";
-	private static final String OVERRIDE_VF = "OverrideVideoFilter";
-	private static final String TEXTWRAP = "TextWrap";
-	private static final String CHARMAP = "CharMap";
+	private static final String WRAP_ENCODED_AUDIO_INTO_PCM = "WrapEncodedAudioIntoPCM";
 
 	public static RendererConfiguration getDefaultConf() {
 		return defaultConf;
@@ -234,6 +244,10 @@ public class RendererConfiguration {
 		return enabledRendererConfs;
 	}
 
+	public static Collection<RendererConfiguration> getConnectedRenderersConfigurations() {
+		return addressAssociation.values();
+	}
+
 	protected static File getRenderersDir() {
 		final String[] pathList = PropertiesUtil.getProjectProperties().get("project.renderers.dir").split(",");
 
@@ -262,7 +276,15 @@ public class RendererConfiguration {
 
 	public RootFolder getRootFolder() {
 		if (rootFolder == null) {
-			rootFolder = new RootFolder(getRendererName());
+			ArrayList<String> tags = new ArrayList();
+			tags.add(getRendererName());
+			for (InetAddress sa : addressAssociation.keySet()) {
+				if (addressAssociation.get(sa) == this) {
+					tags.add(sa.getHostAddress());
+				}
+			}
+
+			rootFolder = new RootFolder(tags);
 			if (pmsConfiguration.getUseCache()) {
 				rootFolder.discoverChildren();
 			}
@@ -355,7 +377,7 @@ public class RendererConfiguration {
 			// Try to find a match
 			for (RendererConfiguration r : enabledRendererConfs) {
 				if (StringUtils.isNotBlank(r.getUserAgentAdditionalHttpHeader()) && header.startsWith(r.getUserAgentAdditionalHttpHeader())) {
-					String value = header.substring(header.indexOf(":", r.getUserAgentAdditionalHttpHeader().length()) + 1);
+					String value = header.substring(header.indexOf(':', r.getUserAgentAdditionalHttpHeader().length()) + 1);
 					if (r.matchAdditionalUserAgent(value)) {
 						return manageRendererMatch(r);
 					}
@@ -389,6 +411,10 @@ public class RendererConfiguration {
 
 	public FormatConfiguration getFormatConfiguration() {
 		return formatConfiguration;
+	}
+
+	public File getFile() {
+		return configuration.getFile();
 	}
 
 	public int getRank() {
@@ -431,7 +457,7 @@ public class RendererConfiguration {
 	}
 
 	RendererConfiguration() throws ConfigurationException {
-		this(null);
+		this((File) null);
 	}
 
 	public RendererConfiguration(File f) throws ConfigurationException {
@@ -455,7 +481,7 @@ public class RendererConfiguration {
 
 			while (st.hasMoreTokens()) {
 				String mime_change = st.nextToken().trim();
-				int equals = mime_change.indexOf("=");
+				int equals = mime_change.indexOf('=');
 
 				if (equals > -1) {
 					String old = mime_change.substring(0, equals).trim().toLowerCase();
@@ -465,27 +491,36 @@ public class RendererConfiguration {
 			}
 		}
 
-        charMap = new HashMap<>();
-        String ch = getString(CHARMAP, null);
-        if (StringUtils.isNotBlank(ch)) {
-            StringTokenizer st = new StringTokenizer(ch, " ");
-            String org = "";
+		String s = getString(TEXTWRAP, "").toLowerCase();
+		line_w = getIntAt(s, "width:", 0);
+		if (line_w > 0) {
+			line_h = getIntAt(s, "height:", 0);
+			indent = getIntAt(s, "indent:", 0);
+			dc_date = getIntAt(s, "date:", 1) != 0;
+			int ws = getIntAt(s, "whitespace:", 9);
+			inset = new String(new byte[indent]).replaceAll(".", Character.toString((char) ws));
+		}
 
-            while (st.hasMoreTokens()) {
-                String tok = st.nextToken().trim();
-                if(StringUtils.isBlank(tok)) {
-                    continue;
-                }
-                tok = tok.replaceAll("###0", " ");
-                if(StringUtils.isBlank(org)) {
-                    org = tok;
-                }
-                else {
-                    charMap.put(org, tok);
-                    org = "";
-                }
-            }
-        }
+		charMap = new HashMap<>();
+		String ch = getString(CHARMAP, null);
+		if (StringUtils.isNotBlank(ch)) {
+			StringTokenizer st = new StringTokenizer(ch, " ");
+			String org = "";
+
+			while (st.hasMoreTokens()) {
+				String tok = st.nextToken().trim();
+				if (StringUtils.isBlank(tok)) {
+					continue;
+				}
+				tok = tok.replaceAll("###0", " ");
+				if (StringUtils.isBlank(org)) {
+					org = tok;
+				} else {
+					charMap.put(org, tok);
+					org = "";
+				}
+			}
+		}
 
 		DLNAPN = new HashMap<>();
 		String DLNAPNchanges = getString(DLNA_PN_CHANGES, null);
@@ -498,7 +533,7 @@ public class RendererConfiguration {
 			StringTokenizer st = new StringTokenizer(DLNAPNchanges, "|");
 			while (st.hasMoreTokens()) {
 				String DLNAPN_change = st.nextToken().trim();
-				int equals = DLNAPN_change.indexOf("=");
+				int equals = DLNAPN_change.indexOf('=');
 				if (equals > -1) {
 					String old = DLNAPN_change.substring(0, equals).trim().toUpperCase();
 					String nw = DLNAPN_change.substring(equals + 1).trim().toUpperCase();
@@ -632,7 +667,7 @@ public class RendererConfiguration {
 		String matchedMimeType = null;
 
 		if (isMediaParserV2()) {
-			// Use the supported information in the configuration to determine the mime type.
+			// Use the supported information in the configuration to determine the transcoding mime type.
 			if (HTTPResource.VIDEO_TRANSCODE.equals(mimeType)) {
 				if (isTranscodeToMPEGTSAC3()) {
 					matchedMimeType = getFormatConfiguration().match(FormatConfiguration.MPEGTS, FormatConfiguration.MPEG2, FormatConfiguration.AC3);
@@ -660,31 +695,36 @@ public class RendererConfiguration {
 					}
 				}
 			}
+
+			if (matchedMimeType != null) {
+				return matchedMimeType;
+			} else {
+				// Return the mime type as it was determined by MediaParserV2.
+				return mimeType;
+			}
 		}
 
-		if (matchedMimeType == null) {
-			// No match found, try without media parser v2
-			if (HTTPResource.VIDEO_TRANSCODE.equals(mimeType)) {
-				if (isTranscodeToWMV()) {
-					matchedMimeType = HTTPResource.WMV_TYPEMIME;
-				} else {
-					// Default video transcoding mime type
-					matchedMimeType = HTTPResource.MPEG_TYPEMIME;
-				}
-			} else if (HTTPResource.AUDIO_TRANSCODE.equals(mimeType)) {
-				if (isTranscodeToWAV()) {
-					matchedMimeType = HTTPResource.AUDIO_WAV_TYPEMIME;
-				} else if (isTranscodeToMP3()) {
-					matchedMimeType = HTTPResource.AUDIO_MP3_TYPEMIME;
-				} else {
-					// Default audio transcoding mime type
-					matchedMimeType = HTTPResource.AUDIO_LPCM_TYPEMIME;
+		// No match found, try without media parser v2
+		if (HTTPResource.VIDEO_TRANSCODE.equals(mimeType)) {
+			if (isTranscodeToWMV()) {
+				matchedMimeType = HTTPResource.WMV_TYPEMIME;
+			} else {
+				// Default video transcoding mime type
+				matchedMimeType = HTTPResource.MPEG_TYPEMIME;
+			}
+		} else if (HTTPResource.AUDIO_TRANSCODE.equals(mimeType)) {
+			if (isTranscodeToWAV()) {
+				matchedMimeType = HTTPResource.AUDIO_WAV_TYPEMIME;
+			} else if (isTranscodeToMP3()) {
+				matchedMimeType = HTTPResource.AUDIO_MP3_TYPEMIME;
+			} else {
+				// Default audio transcoding mime type
+				matchedMimeType = HTTPResource.AUDIO_LPCM_TYPEMIME;
 
-					if (isTranscodeAudioTo441()) {
-						matchedMimeType += ";rate=44100;channels=2";
-					} else {
-						matchedMimeType += ";rate=48000;channels=2";
-					}
+				if (isTranscodeAudioTo441()) {
+					matchedMimeType += ";rate=44100;channels=2";
+				} else {
+					matchedMimeType += ";rate=48000;channels=2";
 				}
 			}
 		}
@@ -858,6 +898,10 @@ public class RendererConfiguration {
 		return getBoolean(WRAP_DTS_INTO_PCM, true);
 	}
 
+	public boolean isWrapEncodedAudioIntoPCM() {
+		return getBoolean(WRAP_ENCODED_AUDIO_INTO_PCM, false);
+	}
+
 	public boolean isLPCMPlayable() {
 		return isMuxLPCMToMpeg();
 	}
@@ -960,6 +1004,8 @@ public class RendererConfiguration {
 					break;
 				case "vqmax":
 					returnString.append("-qmax ").append(pairArray[1]).append(" ");
+					break;
+				default:
 					break;
 			}
 		}
@@ -1176,41 +1222,17 @@ public class RendererConfiguration {
 		return getInt(TRANSCODED_VIDEO_AUDIO_SAMPLE_RATE, 48000);
 	}
 
-	public String getTextWrap() {
-		return getString(TEXTWRAP, "").toLowerCase();
-	}
-
-	protected int line_w = -1, line_h, indent;
-	protected String inset;
-	protected boolean dc_date = true;
-
 	public String getDcTitle(String name, DLNAResource dlna) {
-		// Init text wrap settings
-		String s = getTextWrap();
-		if (!"".equals(s.trim())) {
-			if (line_w == -1) {
-				line_w = getIntAt(s, "width:", 0);
-				if (line_w > 0) {
-					line_h = getIntAt(s, "height:", 0);
-					indent = getIntAt(s, "indent:", 0);
-					dc_date = getIntAt(s, "date:", 1) != 0;
-					int ws = getIntAt(s, "whitespace:", 9);
-					inset = new String(new byte[indent]).replaceAll(".", Character.toString((char) ws));
-					LOGGER.debug("{}: TextWrap width:{} height:{} indent:{} whitespace:{} date:{}", getRendererName(), line_w, line_h, indent, ws, dc_date ? "1" : "0");
-				}
-			}
+		// Wrap text if applicable
+		if (line_w > 0 && name.length() > line_w) {
+			int i = dlna.isFolder() ? 0 : indent;
+			String head = name.substring(0, i + (Character.isWhitespace(name.charAt(i)) ? 1 : 0));
+			String tail = name.substring(i);
+			name = head + WordUtils.wrap(tail, line_w - i, "\n" + (dlna.isFolder() ? "" : inset), true);
+		}
 
-			// Wrap text if applicable
-			if (line_w > 0 && name.length() > line_w) {
-				int i = dlna.isFolder() ? 0 : indent;
-				String head = name.substring(0, i + (Character.isWhitespace(name.charAt(i)) ? 1 : 0));
-				String tail = name.substring(i);
-				name = head + WordUtils.wrap(tail, line_w - i, "\n" + (dlna.isFolder() ? "" : inset), true);
-			}
-
-			for (String s2 : charMap.keySet()) {
-				name = name.replaceAll(s2, charMap.get(s2));
-			}
+		for (String s : charMap.keySet()) {
+			name = name.replaceAll(s, charMap.get(s));
 		}
 
 		return name;
@@ -1226,5 +1248,24 @@ public class RendererConfiguration {
 		} catch (Exception e) {
 			return fallback;
 		}
+	}
+
+	public String getSupportedSubtitles() {
+		return getString(SUPPORTED_SUBTITLES_TYPE, null);
+	}
+
+	public boolean useClosedCaption() {
+		return getBoolean(USE_CLOSED_CAPTION, false);
+	}
+
+	public ArrayList<String> tags() {
+		if (rootFolder != null) {
+			return rootFolder.getTags();
+		}
+		return null;
+	}
+
+	public boolean ignoreTranscodeByteRangeRequests() {
+		return getBoolean(IGNORE_TRANSCODE_BYTE_RANGE_REQUEST, false);
 	}
 }
