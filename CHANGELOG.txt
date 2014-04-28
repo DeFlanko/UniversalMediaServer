@@ -1,4 +1,9 @@
-3.6.0 - 2014-04-??
+3.6.1 - 2014-05-??
+
+	General:
+		
+
+3.6.0 - 2014-04-28
 
 	General:
 		Use the Entertainment application category on OS X instead of Other
@@ -26,6 +31,10 @@
 		Allow muxing of non-mod4 videos to Bravia TVs (thanks, tdcosta100!)
 	Languages:
 		Updated Czech translation
+		Updated Spanish translation (thanks, AlfredoRamos!)
+	External Components:
+		Updated Java Runtime Environment automatic downloader for Windows to 7u55, which:
+			Improves security
 
 3.5.0 - 2014-03-19
 
