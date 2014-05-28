@@ -722,7 +722,7 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 						}
 					}
 
-					if (resumeRes != null) {
+					if (resumeRes != null && resumeRes.getMedia() != null) {
 						resumeRes.getMedia().setThumbready(false);
 					}
 
@@ -773,7 +773,7 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 	 * If UMS is configured to hide transcode folders, null is returned.
 	 * If no folder exists and the create argument is false, null is returned.
 	 * If no folder exists and the create argument is true, a new transcode folder is created.
-	 * This method is called on the parent frolder each time a child is added to that parent
+	 * This method is called on the parent folder each time a child is added to that parent
 	 * (via {@link addChild(DLNAResource)}.
 	 *
 	 * @param create
@@ -1614,7 +1614,7 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 								// If the engine being is tsMuxeR or VLC, we are definitely outputting MPEG-TS so we can skip a lot of tests
 								boolean isFileMPEGTS = TsMuxeRVideo.ID.equals(getPlayer().id()) || VideoLanVideoStreaming.ID.equals(getPlayer().id());
 
-								boolean isMuxableResult = getMedia().isMuxable(mediaRenderer);
+								boolean isMuxableResult = getMedia() != null && getMedia().isMuxable(mediaRenderer);
 								boolean isBravia = mediaRenderer.isBRAVIA();
 
 								// If the engine is MEncoder or FFmpeg, and the muxing settings are enabled, it may be MPEG-TS so we need to do more tests
@@ -1667,7 +1667,7 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 											}
 										}
 
-										if (params.aid == null && getMedia().getAudioTracksList().size() > 0) {
+										if (params.aid == null && getMedia() != null && getMedia().getAudioTracksList().size() > 0) {
 											// Take a default audio track, dts first if possible
 											for (DLNAMediaAudio audio : getMedia().getAudioTracksList()) {
 												if (audio.isDTS()) {
@@ -1731,7 +1731,7 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 														if (sub.equals("off")) {
 															matchedSub = new DLNAMediaSubtitle();
 															matchedSub.setLang("off");
-														} else {
+														} else if (getMedia() != null) {
 															for (DLNAMediaSubtitle present_sub : getMedia().getSubtitleTracksList()) {
 																if (present_sub.matchCode(sub) || sub.equals("*")) {
 																	if (present_sub.getExternalFile() != null) {
@@ -2379,7 +2379,10 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 			}
 
 			if (resume != null) {
-				params.timeseek += (long) (resume.getTimeOffset() / 1000);
+				if (range.isTimeRange()) {
+					resume.update((Range.Time) range, this);
+				}
+				params.timeseek = (long) (resume.getTimeOffset() / 1000);
 				if (getPlayer() == null) {
 					setPlayer(new FFMpegVideo());
 				}
@@ -3286,7 +3289,7 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 			resume.stop(startTime, (long) (getMedia().getDurationInSeconds() * 1000));
 			if (resume.isDone()) {
 				getParent().getChildren().remove(this);
-			} else {
+			} else if (getMedia() != null) {
 				getMedia().setThumbready(false);
 			}
 		} else {
@@ -3297,7 +3300,9 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 						getParent().getChildren().remove(res);
 						return null;
 					}
-					res.getMedia().setThumbready(false);
+					if (res.getMedia() != null) {
+						res.getMedia().setThumbready(false);
+					}
 					return res;
 				}
 			}
@@ -3306,7 +3311,9 @@ public abstract class DLNAResource extends HTTPResource implements Cloneable, Ru
 				DLNAResource clone = this.clone();
 				clone.resume = r;
 				clone.resHash = resHash;
-				clone.getMedia().setThumbready(false);
+				if (clone.getMedia() != null) {
+					clone.getMedia().setThumbready(false);
+				}
 				clone.setPlayer(getPlayer());
 				getParent().addChildInternal(clone);
 				return clone;
