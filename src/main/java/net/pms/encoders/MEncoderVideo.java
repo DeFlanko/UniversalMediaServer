@@ -714,8 +714,12 @@ public class MEncoderVideo extends Player {
 			rendererMaxBitrates = getVideoBitrateConfig(mediaRenderer.getMaxVideoBitrate());
 		}
 
+		// Give priority to the renderer's maximum bitrate setting over the user's setting
 		if (rendererMaxBitrates[0] > 0 && rendererMaxBitrates[0] < defaultMaxBitrates[0]) {
 			defaultMaxBitrates = rendererMaxBitrates;
+			LOGGER.trace("Using the video bitrate limit from the renderer config (" + rendererMaxBitrates[0] + ") which is lower than the one from the program settings (" + defaultMaxBitrates[0] + ")");
+		} else {
+			LOGGER.trace("Using the video bitrate limit from the program settings (" + defaultMaxBitrates[0] + ")");
 		}
 
 		if (mediaRenderer.getCBRVideoBitrate() == 0 && !quality.contains("vrc_buf_size") && !quality.contains("vrc_maxrate") && !quality.contains("vbitrate")) {
@@ -724,6 +728,7 @@ public class MEncoderVideo extends Player {
 
 			// Halve it since it seems to send up to 1 second of video in advance
 			defaultMaxBitrates[0] /= 2;
+			LOGGER.trace("Halving the video bitrate limit to " + defaultMaxBitrates[0]);
 
 			int bufSize = 1835;
 			boolean bitrateLevel41Limited = false;
@@ -736,13 +741,14 @@ public class MEncoderVideo extends Player {
 			 *
 			 * We also apply the correct buffer size in this section.
 			 */
-			if (mediaRenderer.isTranscodeToH264TSAC3()) {
+			if (mediaRenderer.isTranscodeToMPEGTSH264AC3() || mediaRenderer.isTranscodeToMPEGTSH264AAC()) {
 				if (
 					mediaRenderer.isH264Level41Limited() &&
 					defaultMaxBitrates[0] > 31250
 				) {
 					defaultMaxBitrates[0] = 31250;
 					bitrateLevel41Limited = true;
+					LOGGER.trace("Adjusting the video bitrate limit to the H.264 Level 4.1-safe value of 31250");
 				}
 				bufSize = defaultMaxBitrates[0];
 			} else {
@@ -772,6 +778,9 @@ public class MEncoderVideo extends Player {
 					case "dts":
 						defaultMaxBitrates[0] -= 1510;
 						break;
+					case "aac":
+						defaultMaxBitrates[0] -= configuration.getAudioBitrate();
+						break;
 					case "ac3":
 						defaultMaxBitrates[0] -= configuration.getAudioBitrate();
 						break;
@@ -781,6 +790,8 @@ public class MEncoderVideo extends Player {
 
 				// Round down to the nearest Mb
 				defaultMaxBitrates[0] = defaultMaxBitrates[0] / 1000 * 1000;
+
+				LOGGER.trace("Adjusting the video bitrate limit to " + defaultMaxBitrates[0] + " to make room for audio");
 			}
 
 			encodeSettings += ":vrc_maxrate=" + defaultMaxBitrates[0] + ":vrc_buf_size=" + bufSize;
@@ -979,8 +990,8 @@ public class MEncoderVideo extends Player {
 			}
 		}
 
-		mpegts = params.mediaRenderer.isTranscodeToMPEGTSAC3();
-		h264ts = params.mediaRenderer.isTranscodeToH264TSAC3();
+		mpegts = params.mediaRenderer.isTranscodeToMPEGTSMPEG2AC3();
+		h264ts = params.mediaRenderer.isTranscodeToMPEGTSH264AC3() || params.mediaRenderer.isTranscodeToMPEGTSH264AAC();
 
 		String vcodec = "mpeg2video";
 
@@ -1237,7 +1248,9 @@ public class MEncoderVideo extends Player {
 					acodec += "wmav2";
 				} else {
 					acodec = cbr_settings + acodec;
-					if (configuration.isMencoderAc3Fixed()) {
+					if (params.mediaRenderer.isTranscodeToAAC()) {
+						acodec += "libfaac";
+					} else if (configuration.isMencoderAc3Fixed()) {
 						acodec += "ac3_fixed";
 					} else {
 						acodec += "ac3";
@@ -1265,6 +1278,8 @@ public class MEncoderVideo extends Player {
 				audioType = "dts";
 			} else if (pcm || encodedAudioPassthrough) {
 				audioType = "pcm";
+			} else if (params.mediaRenderer.isTranscodeToAAC()) {
+				audioType = "aac";
 			}
 
 			encodeSettings = addMaximumBitrateConstraints(encodeSettings, media, mpeg2Options, params.mediaRenderer, audioType);
@@ -1297,7 +1312,7 @@ public class MEncoderVideo extends Player {
 			}
 
 			String encodeSettings = "-lavcopts autoaspect=1" + vcodecString +
-				":acodec=" + (configuration.isMencoderAc3Fixed() ? "ac3_fixed" : "ac3") +
+				":acodec=" + (params.mediaRenderer.isTranscodeToAAC() ? "libfaac" : configuration.isMencoderAc3Fixed() ? "ac3_fixed" : "ac3") +
 				":abitrate=" + CodecUtil.getAC3Bitrate(configuration, params.aid) +
 				":threads=" + configuration.getMencoderMaxThreads() +
 				":o=preset=superfast,crf=" + x264CRF + ",g=250,i_qfactor=0.71,qcomp=0.6,level=4.1,weightp=0,8x8dct=0,aq-strength=0";
@@ -1307,6 +1322,8 @@ public class MEncoderVideo extends Player {
 				audioType = "dts";
 			} else if (pcm || encodedAudioPassthrough) {
 				audioType = "pcm";
+			} else if (params.mediaRenderer.isTranscodeToMPEGTSH264AAC()) {
+				audioType = "aac";
 			}
 
 			encodeSettings = addMaximumBitrateConstraints(encodeSettings, media, "", params.mediaRenderer, audioType);
@@ -2559,6 +2576,18 @@ public class MEncoderVideo extends Player {
 		args.toArray(definitiveArgs);
 
 		return definitiveArgs;
+	}
+
+	/**
+	 * Unfortunately, the MEncoder version that comes with UMS does not include
+	 * AAC decoding, like FFmpeg and VLC. As soon as the situation changes, this
+	 * method will not be necessary anymore in this class
+	 * @param mediaRenderer
+	 * @return 
+	 */
+	@Override
+	public boolean isPlayerCompatible(RendererConfiguration mediaRenderer) {
+		return !mediaRenderer.isTranscodeToMPEGTSH264AAC();
 	}
 
 	/**
