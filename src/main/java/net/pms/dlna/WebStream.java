@@ -18,19 +18,14 @@
  */
 package net.pms.dlna;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
 import net.pms.network.HTTPResourceAuthenticator;
+import net.pms.util.FileUtil;
 
-/**
- * TODO: Change all instance variables to private. For backwards compatibility
- * with external plugin code the variables have all been marked as deprecated
- * instead of changed to private, but this will surely change in the future.
- * When everything has been changed to private, the deprecated note can be
- * removed.
- */
 public class WebStream extends DLNAResource {
 	@Override
 	public boolean isValid() {
@@ -38,23 +33,9 @@ public class WebStream extends DLNAResource {
 		return getFormat() != null;
 	}
 
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String url;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String fluxName;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String thumbURL;
+	private String url;
+	private String fluxName;
+	private String thumbURL;
 
 	public WebStream(String fluxName, String url, String thumbURL, int type) {
 		super(type);
@@ -62,33 +43,36 @@ public class WebStream extends DLNAResource {
 		try {
 			URL tmpUrl = new URL(url);
 			tmpUrl = HTTPResourceAuthenticator.concatenateUserInfo(tmpUrl);
-			setUrl(tmpUrl.toString());
+			this.url = tmpUrl.toString();
 		} catch (MalformedURLException e) {
-			setUrl(url);
+			this.url = url;
 		}
 
 		try {
 			URL tmpUrl = new URL(thumbURL);
 			tmpUrl = HTTPResourceAuthenticator.concatenateUserInfo(tmpUrl);
-			setThumbURL(tmpUrl.toString());
+			this.thumbURL = tmpUrl.toString();
 		} catch (MalformedURLException e) {
-			setThumbURL(thumbURL);
+			this.thumbURL = thumbURL;
 		}
 
-		setFluxName(fluxName);
+		this.fluxName = fluxName;
 	}
 
 	@Override
 	public String write() {
-		return getFluxName() + ">" + getUrl() + ">" + getThumbURL() + ">" + getSpecificType();
+		return fluxName + ">" + url + ">" + thumbURL + ">" + getSpecificType();
 	}
 
 	@Override
-	public InputStream getThumbnailInputStream() throws IOException {
-		if (getThumbURL() != null) {
-			return downloadAndSend(getThumbURL(), true);
+	public DLNAThumbnailInputStream getThumbnailInputStream() throws IOException {
+		if (thumbURL != null) {
+			return DLNAThumbnailInputStream.toThumbnailInputStream(
+				FileUtil.isUrl(thumbURL) ? downloadAndSend(thumbURL, true) : new FileInputStream(thumbURL)
+			);
 		} else {
-			return super.getThumbnailInputStream();
+			DLNAThumbnailInputStream inputStream = super.getThumbnailInputStream();
+			return inputStream;
 		}
 	}
 
@@ -110,12 +94,6 @@ public class WebStream extends DLNAResource {
 	@Override
 	public boolean isFolder() {
 		return false;
-	}
-
-	// XXX unused
-	@Deprecated
-	public long lastModified() {
-		return 0;
 	}
 
 	@Override

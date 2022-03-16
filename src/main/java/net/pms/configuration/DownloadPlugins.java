@@ -1,3 +1,23 @@
+/*
+ * Universal Media Server, for streaming any media to DLNA
+ * compatible renderers based on the http://www.ps3mediaserver.org.
+ * Copyright (C) 2012 UMS developers.
+ *
+ * This program is a free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; version 2
+ * of the License only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ */
+
 package net.pms.configuration;
 
 import com.sun.jna.Platform;
@@ -13,6 +33,7 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import javax.swing.JLabel;
@@ -26,15 +47,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class DownloadPlugins {
-	private final static String PLUGIN_LIST_URL = "http://www.universalmediaserver.com/plugins/list.php";
-	private final static String PLUGIN_TEST_FILE = "plugin_inst.tst";
+	private static final String PLUGIN_LIST_URL = "https://www.universalmediaserver.com/plugins/list.php";
+	private static final String PLUGIN_TEST_FILE = "plugin_inst.tst";
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(DownloadPlugins.class);
-	private static final PmsConfiguration configuration = PMS.getConfiguration();
-
-	private static final int TYPE_JAR = 0;
-	private static final int TYPE_LIST = 1;
-	private static final int TYPE_PLATFORM_LIST = 2;
+	private static final PmsConfiguration CONFIGURATION = PMS.getConfiguration();
 
 	private String id;
 	private String name;
@@ -43,7 +60,6 @@ public class DownloadPlugins {
 	private String url;
 	private String author;
 	private String version;
-	private int type;
 	private ArrayList<URL> jars;
 	private JLabel updateLabel;
 	private String[] props;
@@ -53,7 +69,7 @@ public class DownloadPlugins {
 	public static ArrayList<DownloadPlugins> downloadList() {
 		ArrayList<DownloadPlugins> res = new ArrayList<>();
 
-		if (!configuration.getExternalNetwork()) {
+		if (!CONFIGURATION.getExternalNetwork()) {
 			// Do not try to get the plugin list if there is no
 			// external network.
 			return res;
@@ -65,11 +81,11 @@ public class DownloadPlugins {
 			connection.setConnectTimeout(5000);
 			connection.setReadTimeout(5000);
 			BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-			parse_list(res, in, false);
-			File test = new File(configuration.getPluginDirectory() + File.separator + PLUGIN_TEST_FILE);
+			parseList(res, in, false);
+			File test = new File(CONFIGURATION.getPluginDirectory() + File.separator + PLUGIN_TEST_FILE);
 			if (test.exists()) {
 				in = new BufferedReader(new InputStreamReader(new FileInputStream(test)));
-				parse_list(res, in, true);
+				parseList(res, in, true);
 			}
 		} catch (IOException e) {
 		}
@@ -84,7 +100,7 @@ public class DownloadPlugins {
 		}
 	}
 
-	private static void parse_list(ArrayList<DownloadPlugins> res, BufferedReader in, boolean test) throws IOException {
+	private static void parseList(ArrayList<DownloadPlugins> res, BufferedReader in, boolean test) throws IOException {
 		String str;
 		DownloadPlugins plugin = new DownloadPlugins(test);
 		while ((str = in.readLine()) != null) {
@@ -99,6 +115,7 @@ public class DownloadPlugins {
 					LOGGER.trace("An invalid plugin was ignored (1)");
 				}
 				plugin = new DownloadPlugins(test);
+				continue;
 			}
 			String[] keyval = str.split("=", 2);
 			if (keyval.length < 2) {
@@ -109,10 +126,6 @@ public class DownloadPlugins {
 			}
 			if (keyval[0].equalsIgnoreCase("name")) {
 				plugin.name = keyval[1];
-			}
-			if (keyval[0].equalsIgnoreCase("rating")) {
-				// Rating is temporarily switched off
-				// plugin.rating = keyval[1];
 			}
 			if (keyval[0].equalsIgnoreCase("desc")) {
 				plugin.desc = keyval[1];
@@ -126,26 +139,15 @@ public class DownloadPlugins {
 			if (keyval[0].equalsIgnoreCase("version")) {
 				plugin.version = keyval[1];
 			}
-			if (keyval[0].equalsIgnoreCase("type")) {
-				if (keyval[1].equalsIgnoreCase("jar")) {
-					plugin.type = DownloadPlugins.TYPE_JAR;
-				}
-				if (keyval[1].equalsIgnoreCase("list")) {
-					plugin.type = DownloadPlugins.TYPE_LIST;
-				}
-				if (keyval[1].equalsIgnoreCase("platform_list")) {
-					plugin.type = DownloadPlugins.TYPE_PLATFORM_LIST;
-				}
-			}
 			if (keyval[0].equalsIgnoreCase("require")) {
 				plugin.old = false;
 				String[] minVer = keyval[1].split("\\.");
 				String[] myVer = PMS.getVersion().split("\\.");
 				int max = Math.max(myVer.length, minVer.length);
 				for (int i = 0; i < max; i++) {
-					int my,min;
+					int my, min;
 					// If the versions are of different length
-					// say that the part of "worng" length is 0
+					// say that the part of "wrong" length is 0
 					my = getInt(((i > myVer.length) ? "0" : myVer[i]));
 					min = getInt(((i > minVer.length) ? "0" : minVer[i]));
 					if (min == my) {
@@ -181,7 +183,6 @@ public class DownloadPlugins {
 	}
 
 	public DownloadPlugins(boolean test) {
-		type = DownloadPlugins.TYPE_JAR;
 		rating = "--";
 		jars = null;
 		old = false;
@@ -297,7 +298,7 @@ public class DownloadPlugins {
 					continue;
 				}
 				int count;
-				byte data[] = new byte[4096];
+				byte[] data = new byte[4096];
 				FileOutputStream fos = new FileOutputStream(dst);
 				try (BufferedOutputStream dest = new BufferedOutputStream(fos, 4096)) {
 					while ((count = zis.read(data, 0, 4096)) != -1) {
@@ -343,6 +344,8 @@ public class DownloadPlugins {
 			}
 
 			out.flush();
+		} catch (Exception e) {
+			LOGGER.warn("Plugin download error: " + e);
 		}
 
 		if (fName.endsWith(".zip")) {
@@ -368,31 +371,27 @@ public class DownloadPlugins {
 
 		// Everything after the "," is what we're supposed to run
 		// First make note of jars we got
-		File[] oldJar = new File(configuration.getPluginDirectory()).listFiles();
+		File[] oldJar = new File(CONFIGURATION.getPluginDirectory()).listFiles();
 
 		// Before we start external installers better save the config
-		configuration.save();
+		CONFIGURATION.save();
 		ProcessBuilder pb = new ProcessBuilder(args.substring(pos + 1));
 		pb.redirectErrorStream(true);
 		Map<String, String> env = pb.environment();
-		env.put("PROFILE_PATH", configuration.getProfilePath());
+		env.put("PROFILE_PATH", CONFIGURATION.getProfilePath());
 		env.put("UMS_VERSION", PMS.getVersion());
-		Process pid = pb.start();
-		InputStream is = pid.getInputStream();
-		InputStreamReader isr = new InputStreamReader(is);
-		try (BufferedReader br = new BufferedReader(isr)) {
-			String line;
-			StringBuilder sb = new StringBuilder();
-			while ((line = br.readLine()) != null) {
-				sb.append(line);
-			}
 
-			// Reload the config in case we have new settings
-			configuration.reload();
+		LOGGER.debug("running '" + args + "'");
+		Process pid = pb.start();
+		// Consume and log any output
+		Scanner output = new Scanner(pid.getInputStream());
+		while (output.hasNextLine()) {
+			LOGGER.debug("[" + args + "] " + output.nextLine());
 		}
+		CONFIGURATION.reload();
 		pid.waitFor();
 
-		File[] newJar = new File(configuration.getPluginDirectory()).listFiles();
+		File[] newJar = new File(CONFIGURATION.getPluginDirectory()).listFiles();
 		for (File f : newJar) {
 			if (!f.getAbsolutePath().endsWith(".jar")) {
 				// skip non jar files
@@ -441,8 +440,8 @@ public class DownloadPlugins {
 		if (cmd.equalsIgnoreCase("conf")) {
 			String[] tmp = args.split(",", 2);
 			tmp = tmp[1].split("=");
-			configuration.setCustomProperty(tmp[1], tmp[2]);
-			configuration.save();
+			CONFIGURATION.setCustomProperty(tmp[1], tmp[2]);
+			CONFIGURATION.save();
 			return true;
 		}
 
@@ -462,29 +461,37 @@ public class DownloadPlugins {
 		if ("".equals(url)) {
 			url = PLUGIN_LIST_URL + "?id=" + id;
 		}
+		String platform = Platform.isWindows() ? "windows" : Platform.isLinux() ? "linux" : Platform.isMac() ? "osx" : "";
 		URL u = new URL(url);
 		URLConnection connection = u.openConnection();
-		boolean res;
+		boolean res, skip = false;
 		try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
 			String str;
 			res = true;
 
 			while ((str = in.readLine()) != null) {
 				str = str.trim();
-				
 				if (StringUtils.isEmpty(str)) {
 					continue;
 				}
-				
+				if (str.toLowerCase().matches("windows|linux|osx")) {
+					skip = !str.toLowerCase().equals(platform);
+					continue;
+				}
+				if (skip) {
+					// This line is specific to another platform, ignore it
+					continue;
+				}
+
 				String[] tmp = str.split(",", 3);
-				String dir = configuration.getPluginDirectory();
+				String dir = CONFIGURATION.getPluginDirectory();
 				String filename = "";
-				
+
 				if (command(tmp[0], str)) {
 					// a command take the next line
 					continue;
 				}
-				
+
 				if (tmp.length > 1) {
 					String rootDir = new File("").getAbsolutePath();
 					if (tmp[1].equalsIgnoreCase("root")) {
@@ -496,7 +503,7 @@ public class DownloadPlugins {
 						filename = tmp[2];
 					}
 				}
-				
+
 				res &= downloadFile(tmp[0], dir, filename);
 			}
 		}
@@ -505,35 +512,16 @@ public class DownloadPlugins {
 	}
 
 	private boolean download() throws Exception {
-		if (type == DownloadPlugins.TYPE_LIST) {
-			if (isTest()) {
-				// we can't use the id based stuff
-				// when testing
-				return downloadList(url);
-			}
-			return downloadList("");
-		}
-		if (type == DownloadPlugins.TYPE_PLATFORM_LIST) {
-			String ext = "";
-			if (Platform.isWindows()) {
-				ext = ".win";
-			} else if (Platform.isLinux()) {
-				ext = ".lin";
-			} else if (Platform.isMac()) {
-				ext = ".osx";
-			}
-			return downloadList(url + ext);
-		}
-
 		if (isTest()) {
-			return downloadFile(url, configuration.getPluginDirectory(), "");
+			// we can't use the id based stuff
+			// when testing
+			return downloadList(url);
 		}
-
-		return false;
+		return downloadList("");
 	}
 
 	public boolean install(JLabel update) throws Exception {
-		LOGGER.debug("Installing plugin " + name + " type " + type);
+		LOGGER.debug("Installing plugin " + name);
 		updateLabel = update;
 
 		// Init the jar file list

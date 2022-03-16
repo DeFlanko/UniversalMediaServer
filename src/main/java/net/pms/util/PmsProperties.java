@@ -1,19 +1,41 @@
+/*
+ * Universal Media Server, for streaming any media to DLNA
+ * compatible renderers based on the http://www.ps3mediaserver.org.
+ * Copyright (C) 2012 UMS developers.
+ *
+ * This program is a free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; version 2
+ * of the License only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ */
+
 package net.pms.util;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 
 /**
  * Convenience wrapper around the Java Properties class.
- * 
+ *
  * @author Tim Cox (mail@tcox.org)
  */
 public class PmsProperties {
 	private final Properties properties = new Properties();
-	private static final String ENCODING = "UTF-8";
+	private static final Charset ENCODING = StandardCharsets.UTF_8;
 
 	public void loadFromByteArray(byte[] data) throws IOException {
 		try {

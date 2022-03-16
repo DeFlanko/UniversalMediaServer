@@ -18,9 +18,9 @@ public class FolderLimitLevel extends VirtualFolder {
 
 	public void setStart(DLNAResource r) {
 		if (r.getParent() == null) {
-			start = (DLNAResource) r.clone();
+			start = r.clone();
 		} else {
-			start = (DLNAResource) r.getParent().clone();
+			start = r.getParent().clone();
 		}
 		resolve();
 	}
@@ -33,7 +33,7 @@ public class FolderLimitLevel extends VirtualFolder {
 	}
 
 	@Override
-	public void resolve() {
+	public synchronized void resolve() {
 		this.setDiscovered(false);
 		this.getChildren().clear();
 	}

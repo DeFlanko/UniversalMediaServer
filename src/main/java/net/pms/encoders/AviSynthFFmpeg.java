@@ -36,7 +36,6 @@ import java.util.ArrayList;
 import java.util.StringTokenizer;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
-import javax.swing.JFrame;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import net.pms.Messages;
@@ -46,6 +45,7 @@ import net.pms.dlna.DLNAMediaSubtitle;
 import net.pms.dlna.DLNAResource;
 import net.pms.formats.Format;
 import net.pms.formats.v2.SubtitleType;
+import net.pms.newgui.GuiUtil;
 import net.pms.util.PlayerUtil;
 import net.pms.util.ProcessUtil;
 import org.apache.commons.configuration.event.ConfigurationEvent;
@@ -54,20 +54,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /*
- * This class handles the Windows-specific AviSynth/FFmpeg player combination. 
+ * This class handles the Windows-specific AviSynth/FFmpeg player combination.
  */
 public class AviSynthFFmpeg extends FFMpegVideo {
 	private static final Logger LOGGER = LoggerFactory.getLogger(AviSynthFFmpeg.class);
-	public static final String ID = "avsffmpeg";
+	public static final PlayerId ID = StandardPlayerId.AVI_SYNTH_FFMPEG;
+	public static final String NAME = "AviSynth/FFmpeg";
+
+	// Not to be instantiated by anything but PlayerFactory
+	AviSynthFFmpeg() {
+	}
 
 	@Override
-	public String id() {
+	public PlayerId id() {
 		return ID;
 	}
 
 	@Override
 	public String name() {
-		return "AviSynth/FFmpeg";
+		return NAME;
 	}
 
 	@Override
@@ -95,13 +100,13 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 	}
 
 	public static File getAVSScript(String filename, DLNAMediaSubtitle subTrack) throws IOException {
-		return getAVSScript(filename, subTrack, -1, -1, null, null);
+		return getAVSScript(filename, subTrack, -1, -1, null, null, CONFIGURATION);
 	}
 
 	/*
 	 * Generate the AviSynth script based on the user's settings
 	 */
-	public static File getAVSScript(String filename, DLNAMediaSubtitle subTrack, int fromFrame, int toFrame, String frameRateRatio, String frameRateNumber) throws IOException {
+	public static File getAVSScript(String filename, DLNAMediaSubtitle subTrack, int fromFrame, int toFrame, String frameRateRatio, String frameRateNumber, PmsConfiguration configuration) throws IOException {
 		String onlyFileName = filename.substring(1 + filename.lastIndexOf('\\'));
 		File file = new File(configuration.getTempFolder(), "pms-avs-" + onlyFileName + ".avs");
 		try (PrintWriter pw = new PrintWriter(new FileOutputStream(file))) {
@@ -148,12 +153,12 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 			String interframeLines = null;
 			String interframePath  = configuration.getInterFramePath();
 
-			int Cores = 1;
+			int cores = 1;
 			if (configuration.isFfmpegAviSynthMultithreading()) {
-				Cores = configuration.getNumberOfCpuCores();
+				cores = configuration.getNumberOfCpuCores();
 
 				// Goes at the start of the file to initiate multithreading
-				mtLine1 = "SetMemoryMax(512)\nSetMTMode(3," + Cores + ")\n";
+				mtLine1 = "SetMemoryMax(512)\nSetMTMode(3," + cores + ")\n";
 
 				// Goes after the input line to make multithreading more efficient
 				mtLine2 = "SetMTMode(2)";
@@ -161,12 +166,12 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 
 			// True Motion
 			if (configuration.getFfmpegAvisynthInterFrame()) {
-				String GPU = "";
+				String gpu = "";
 				movieLine += ".ConvertToYV12()";
 
 				// Enable GPU to assist with CPU
-				if (configuration.getFfmpegAvisynthInterFrameGPU() && interframegpu.isEnabled()){
-					GPU = ", GPU=true";
+				if (configuration.getFfmpegAvisynthInterFrameGPU() && interframegpu.isEnabled()) {
+					gpu = ", GPU=true";
 				}
 
 				interframeLines = "\n" +
@@ -174,18 +179,25 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 					"LoadPlugin(PluginPath+\"svpflow1.dll\")\n" +
 					"LoadPlugin(PluginPath+\"svpflow2.dll\")\n" +
 					"Import(PluginPath+\"InterFrame2.avsi\")\n" +
-					"InterFrame(Cores=" + Cores + GPU + ", Preset=\"Fast\")\n";
+					"InterFrame(Cores=" + cores + gpu + ", Preset=\"Faster\")\n";
 			}
 
 			String subLine = null;
-			if (subTrack != null && configuration.isAutoloadExternalSubtitles() && !configuration.isDisableSubtitles()) {
+			if (
+				subTrack != null &&
+				subTrack.isExternal() &&
+				configuration.isAutoloadExternalSubtitles() &&
+				!configuration.isDisableSubtitles()
+			) {
 				if (subTrack.getExternalFile() != null) {
-					LOGGER.info("AviSynth script: Using subtitle track: " + subTrack);
+					LOGGER.info("AviSynth script: Using subtitle track: {}", subTrack);
 					String function = "TextSub";
 					if (subTrack.getType() == SubtitleType.VOBSUB) {
 						function = "VobSub";
 					}
-					subLine = function + "(\"" + ProcessUtil.getShortFileNameIfWideChars(subTrack.getExternalFile().getAbsolutePath()) + "\")";
+					subLine = function + "(\"" + ProcessUtil.getShortFileNameIfWideChars(subTrack.getExternalFile()) + "\")";
+				} else {
+					LOGGER.error("External subtitles file \"{}\" is unavailable", subTrack.getName());
 				}
 			}
 
@@ -260,7 +272,7 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 				configuration.setFfmpegAviSynthMultithreading(e.getStateChange() == ItemEvent.SELECTED);
 			}
 		});
-		builder.add(multithreading, cc.xy(2, 3));
+		builder.add(GuiUtil.getPreferredSizeComponent(multithreading), cc.xy(2, 3));
 
 		interframe = new JCheckBox(Messages.getString("AviSynthMEncoder.13"), configuration.getFfmpegAvisynthInterFrame());
 		interframe.setContentAreaFilled(false);
@@ -270,7 +282,7 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 				configuration.setFfmpegAvisynthInterFrame(interframe.isSelected());
 				if (configuration.getFfmpegAvisynthInterFrame()) {
 					JOptionPane.showMessageDialog(
-						(JFrame) (SwingUtilities.getWindowAncestor((Component) PMS.get().getFrame())),
+						SwingUtilities.getWindowAncestor((Component) PMS.get().getFrame()),
 						Messages.getString("AviSynthMEncoder.16"),
 						Messages.getString("Dialog.Information"),
 						JOptionPane.INFORMATION_MESSAGE
@@ -278,7 +290,7 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 				}
 			}
 		});
-		builder.add(interframe, cc.xy(2, 5));
+		builder.add(GuiUtil.getPreferredSizeComponent(interframe), cc.xy(2, 5));
 
 		interframegpu = new JCheckBox(Messages.getString("AviSynthMEncoder.15"), configuration.getFfmpegAvisynthInterFrameGPU());
 		interframegpu.setContentAreaFilled(false);
@@ -288,7 +300,7 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 				configuration.setFfmpegAvisynthInterFrameGPU((e.getStateChange() == ItemEvent.SELECTED));
 			}
 		});
-		builder.add(interframegpu, cc.xy(2, 7));
+		builder.add(GuiUtil.getPreferredSizeComponent(interframegpu), cc.xy(2, 7));
 
 		convertfps = new JCheckBox(Messages.getString("AviSynthMEncoder.3"), configuration.getFfmpegAvisynthConvertFps());
 		convertfps.setContentAreaFilled(false);
@@ -298,7 +310,7 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 				configuration.setFfmpegAvisynthConvertFps((e.getStateChange() == ItemEvent.SELECTED));
 			}
 		});
-		builder.add(convertfps, cc.xy(2, 9));
+		builder.add(GuiUtil.getPreferredSizeComponent(convertfps), cc.xy(2, 9));
 
 		configuration.addConfigurationListener(new ConfigurationListener() {
 			@Override
@@ -315,9 +327,6 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 		return builder.getPanel();
 	}
 
-	/**
-	 * {@inheritDoc}
-	 */
 	@Override
 	public boolean isCompatible(DLNAResource resource) {
 		Format format = resource.getFormat();
@@ -353,7 +362,8 @@ public class AviSynthFFmpeg extends FFMpegVideo {
 
 		if (
 			PlayerUtil.isVideo(resource, Format.Identifier.MKV) ||
-			PlayerUtil.isVideo(resource, Format.Identifier.MPG)
+			PlayerUtil.isVideo(resource, Format.Identifier.MPG) ||
+			PlayerUtil.isVideo(resource, Format.Identifier.OGG)
 		) {
 			return true;
 		}

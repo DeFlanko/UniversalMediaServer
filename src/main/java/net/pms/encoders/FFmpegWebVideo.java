@@ -18,26 +18,28 @@
  */
 package net.pms.encoders;
 
-import com.sun.jna.Platform;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.JComponent;
+import net.pms.configuration.DeviceConfiguration;
+import net.pms.configuration.ExecutableInfo;
+import net.pms.configuration.FFmpegExecutableInfo;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
 import net.pms.dlna.DLNAMediaInfo;
 import net.pms.dlna.DLNAResource;
-import net.pms.external.ExternalFactory;
-import net.pms.external.URLResolver.URLResult;
 import net.pms.io.OutputParams;
+import net.pms.io.OutputTextLogger;
 import net.pms.io.PipeProcess;
 import net.pms.io.ProcessWrapper;
 import net.pms.io.ProcessWrapperImpl;
-import net.pms.io.OutputTextLogger;
 import net.pms.util.PlayerUtil;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.LineIterator;
@@ -47,10 +49,33 @@ import org.slf4j.LoggerFactory;
 
 public class FFmpegWebVideo extends FFMpegVideo {
 	private static final Logger LOGGER = LoggerFactory.getLogger(FFmpegWebVideo.class);
-	private static List<String> protocols;
-	public static PatternMap<Object> excludes = new PatternMap<>();
+	public static final PlayerId ID = StandardPlayerId.FFMPEG_WEB_VIDEO;
 
-	public static PatternMap<ArrayList> autoOptions = new PatternMap<ArrayList>() {
+	public static final String KEY_FFMPEG_WEB_EXECUTABLE_TYPE = "ffmpeg_web_executable_type";
+	public static final String NAME = "FFmpeg Web Video";
+
+	// Not to be instantiated by anything but PlayerFactory
+	FFmpegWebVideo() {
+	}
+
+	/**
+	 * Must be used to protect all access to {@link #excludes}, {@link #autoOptions} and {@link #replacements}
+	 */
+	protected static final ReentrantReadWriteLock FILTERS_LOCK = new ReentrantReadWriteLock();
+
+	static {
+		readWebFilters(CONFIGURATION.getProfileDirectory() + File.separator + "ffmpeg.webfilters");
+	}
+
+	/**
+	 * All access must be protected with {@link #filtersLock}
+	 */
+	protected static final PatternMap<Object> EXCLUDES = new PatternMap<>();
+
+	/**
+	 * All access must be protected with {@link #filtersLock}
+	 */
+	protected static final PatternMap<ArrayList> AUTO_OPTIONS = new PatternMap<ArrayList>() {
 		private static final long serialVersionUID = 5225786297932747007L;
 
 		@Override
@@ -59,12 +84,50 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		}
 	};
 
-	public static PatternMap<String> replacements = new PatternMap<>();
-	private static boolean init = false;
+	/**
+	 * All access must be protected with {@link #filtersLock}
+	 */
+	protected static final PatternMap<String> REPLACEMENTS = new PatternMap<>();
 
-	// FIXME we have an id() accessor for this; no need for the field to be public
-	@Deprecated
-	public static final String ID = "ffmpegwebvideo";
+	protected static boolean readWebFilters(String filename) {
+		String line;
+		try {
+			LineIterator it = FileUtils.lineIterator(new File(filename));
+			FILTERS_LOCK.writeLock().lock();
+			try {
+				PatternMap<?> filter = null;
+				while (it.hasNext()) {
+					line = it.nextLine().trim();
+					if (line.isEmpty() || line.startsWith("#")) {
+						continue;
+					} else if (line.equals("EXCLUDE")) {
+						filter = EXCLUDES;
+					} else if (line.equals("OPTIONS")) {
+						filter = AUTO_OPTIONS;
+					} else if (line.equals("REPLACE")) {
+						filter = REPLACEMENTS;
+					} else if (filter != null) {
+						String[] var = line.split(" \\| ", 2);
+						filter.add(var[0], var.length > 1 ? var[1] : null);
+					}
+				}
+				return true;
+			} finally {
+				FILTERS_LOCK.writeLock().unlock();
+				it.close();
+			}
+		} catch (FileNotFoundException e) {
+			if (LOGGER.isTraceEnabled()) {
+				LOGGER.info("FFmpeg web filters \"{}\" not found, web filters ignored: {}", filename, e.getMessage());
+			} else {
+				LOGGER.info("FFmpeg web filters \"{}\" not found, web filters ignored", filename);
+			}
+		} catch (IOException e) {
+			LOGGER.debug("Error reading ffmpeg web filters from file \"{}\": {}", filename, e.getMessage());
+			LOGGER.trace("", e);
+		}
+		return false;
+	}
 
 	@Override
 	public JComponent config() {
@@ -72,8 +135,13 @@ public class FFmpegWebVideo extends FFMpegVideo {
 	}
 
 	@Override
-	public String id() {
+	public PlayerId id() {
 		return ID;
+	}
+
+	@Override
+	public String getExecutableTypeKey() {
+		return KEY_FFMPEG_WEB_EXECUTABLE_TYPE;
 	}
 
 	@Override
@@ -86,128 +154,82 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		return false;
 	}
 
-	@Deprecated
-	public FFmpegWebVideo(PmsConfiguration configuration) {
-		this();
-	}
-	
-	public FFmpegWebVideo() {
-		if (!init) {
-			readWebFilters(configuration.getProfileDirectory() + File.separator + "ffmpeg.webfilters");
-			protocols = FFmpegOptions.getSupportedProtocols(configuration);
-			if (protocols.contains("mmsh")) {
-				// see XXX workaround below
-				protocols.add("mms");
-			}
-			LOGGER.debug("FFmpeg supported protocols: " + protocols);
-			init = true;
-		}
-	}
-
 	@Override
 	public synchronized ProcessWrapper launchTranscode(
 		DLNAResource dlna,
 		DLNAMediaInfo media,
 		OutputParams params
 	) throws IOException {
-		params.minBufferSize = params.minFileSize;
-		params.secondread_minsize = 100000;
-		RendererConfiguration renderer = params.mediaRenderer;
-		String filename = dlna.getSystemName();
-		setAudioAndSubs(filename, media, params);
+		params.setMinBufferSize(params.getMinFileSize());
+		params.setSecondReadMinSize(100000);
+		// Use device-specific conf
+		PmsConfiguration prev = configuration;
+		configuration = (DeviceConfiguration) params.getMediaRenderer();
+		RendererConfiguration renderer = params.getMediaRenderer();
+		String filename = dlna.getFileName();
+		setAudioAndSubs(dlna, params);
 
-		// XXX work around an ffmpeg bug: http://ffmpeg.org/trac/ffmpeg/ticket/998
+		// Workaround an FFmpeg bug: http://ffmpeg.org/trac/ffmpeg/ticket/998
+		// Also see static init
 		if (filename.startsWith("mms:")) {
 			filename = "mmsh:" + filename.substring(4);
 		}
 
 		// check if we have modifier for this url
-		String r = replacements.match(filename);
-		if (r != null) {
-			filename = filename.replaceAll(r, replacements.get(r));
-			LOGGER.debug("modified url: " + filename);
+		FILTERS_LOCK.readLock().lock();
+		try {
+			String r = REPLACEMENTS.match(filename);
+			if (r != null) {
+				filename = filename.replaceAll(r, REPLACEMENTS.get(r));
+				LOGGER.debug("Modified url: {}", filename);
+			}
+		} finally {
+			FILTERS_LOCK.readLock().unlock();
 		}
 
 		FFmpegOptions customOptions = new FFmpegOptions();
 
 		// Gather custom options from various sources in ascending priority:
 		// - automatic options
-		String match = autoOptions.match(filename);
-		if (match != null) {
-			List<String> opts = autoOptions.get(match);
-			if (opts != null) {
-				customOptions.addAll(opts);
+		FILTERS_LOCK.readLock().lock();
+		try {
+			String match = AUTO_OPTIONS.match(filename);
+			if (match != null) {
+				List<String> opts = AUTO_OPTIONS.get(match);
+				if (opts != null) {
+					customOptions.addAll(opts);
+				}
 			}
+		} finally {
+			FILTERS_LOCK.readLock().unlock();
 		}
 		// - (http) header options
-		if (params.header != null && params.header.length > 0) {
-			String hdr = new String(params.header);
+		if (params.getHeader() != null && params.getHeader().length > 0) {
+			String hdr = new String(params.getHeader());
 			customOptions.addAll(parseOptions(hdr));
 		}
 		// - attached options
-		String attached = (String) dlna.getAttachment(ID);
+		String attached = (String) dlna.getAttachment(ID.toString());
 		if (attached != null) {
 			customOptions.addAll(parseOptions(attached));
 		}
 		// - renderer options
-		if (StringUtils.isNotEmpty(renderer.getCustomFFmpegOptions())) {
-			customOptions.addAll(parseOptions(renderer.getCustomFFmpegOptions()));
+		String ffmpegOptions = renderer.getCustomFFmpegOptions();
+		if (StringUtils.isNotEmpty(ffmpegOptions)) {
+			customOptions.addAll(parseOptions(ffmpegOptions));
 		}
-
-		// basename of the named pipe:
-		// ffmpeg -loglevel warning -threads nThreads -i URL -threads nThreads -transcode-video-options /path/to/fifoName
-		String fifoName = String.format(
-			"ffmpegwebvideo_%d_%d",
-			Thread.currentThread().getId(),
-			System.currentTimeMillis()
-		);
-
-		// This process wraps the command that creates the named pipe
-		PipeProcess pipe = new PipeProcess(fifoName);
-		pipe.deleteLater(); // delete the named pipe later; harmless if it isn't created
-		ProcessWrapper mkfifo_process = pipe.getPipeProcess();
-
-		/**
-		 * It can take a long time for Windows to create a named pipe (and
-		 * mkfifo can be slow if /tmp isn't memory-mapped), so run this in
-		 * the current thread.
-		 */
-		mkfifo_process.runInSameThread();
-
-		params.input_pipes[0] = pipe;
 
 		// Build the command line
 		List<String> cmdList = new ArrayList<>();
-		if (!dlna.isURLResolved()) {
-			URLResult r1 = ExternalFactory.resolveURL(filename);
-			if (r1 != null) {
-				if (r1.precoder != null) {
-					filename = "-";
-					if (Platform.isWindows()) {
-						cmdList.add("cmd.exe");
-						cmdList.add("/C");
-					}
-					cmdList.addAll(r1.precoder);
-					cmdList.add("|");
-				} else {
-					if (StringUtils.isNotEmpty(r1.url)) {
-						filename = r1.url;
-					}
-				}
-				if (r1.args != null && r1.args.size() > 0) {
-					customOptions.addAll(r1.args);
-				}
-			}
-		}
 
-		cmdList.add(executable());
+		cmdList.add(getExecutable());
 
 		// XXX squashed bug - without this, ffmpeg hangs waiting for a confirmation
 		// that it can write to a file that already exists i.e. the named pipe
 		cmdList.add("-y");
 
 		cmdList.add("-loglevel");
-		
+
 		if (LOGGER.isTraceEnabled()) { // Set -loglevel in accordance with LOGGER setting
 			cmdList.add("info"); // Could be changed to "verbose" or "debug" if "info" level is not enough
 		} else {
@@ -241,9 +263,9 @@ public class FFmpegWebVideo extends FFMpegVideo {
 			customOptions.transferInputFileOptions(cmdList);
 		}
 
-		if (params.timeseek > 0) {
+		if (params.getTimeSeek() > 0) {
 			cmdList.add("-ss");
-			cmdList.add("" + (int) params.timeseek);
+			cmdList.add("" + (int) params.getTimeSeek());
 		}
 
 		cmdList.add("-i");
@@ -258,18 +280,52 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		}
 
 		// Add the output options (-f, -c:a, -c:v, etc.)
-		cmdList.addAll(getVideoTranscodeOptions(dlna, media, params));
 
-		// Add video bitrate options
-		cmdList.addAll(getVideoBitrateOptions(dlna, media, params));
-
-		// Add audio bitrate options
-		cmdList.addAll(getAudioBitrateOptions(dlna, media, params));
-
-		// Add any remaining custom options
-		if (!customOptions.isEmpty()) {
-			customOptions.transferAll(cmdList);
+		// Now that inputs and filtering are complete, see if we should
+		// give the renderer the final say on the command
+		boolean override = false;
+		if (renderer instanceof RendererConfiguration.OutputOverride) {
+			override = ((RendererConfiguration.OutputOverride) renderer).getOutputOptions(cmdList, dlna, this, params);
 		}
+
+		if (!override) {
+			// TODO: See if that last boolean can be set more carefully to disable unnecessary transcoding
+			cmdList.addAll(getVideoTranscodeOptions(dlna, media, params, false));
+
+			// Add video bitrate options
+			cmdList.addAll(getVideoBitrateOptions(dlna, media, params));
+
+			// Add audio bitrate options
+			cmdList.addAll(getAudioBitrateOptions(dlna, media, params));
+
+			// Add any remaining custom options
+			if (!customOptions.isEmpty()) {
+				customOptions.transferAll(cmdList);
+			}
+		}
+
+		// Set up the process
+
+		// basename of the named pipe:
+		String fifoName = String.format(
+			"ffmpegwebvideo_%d_%d",
+			Thread.currentThread().getId(),
+			System.currentTimeMillis()
+		);
+
+		// This process wraps the command that creates the named pipe
+		PipeProcess pipe = new PipeProcess(fifoName);
+		pipe.deleteLater(); // delete the named pipe later; harmless if it isn't created
+		ProcessWrapper mkfifoProcess = pipe.getPipeProcess();
+
+		/**
+		 * It can take a long time for Windows to create a named pipe (and
+		 * mkfifo can be slow if /tmp isn't memory-mapped), so run this in
+		 * the current thread.
+		 */
+		mkfifoProcess.runInSameThread();
+
+		params.getInputPipes()[0] = pipe;
 
 		// Output file
 		cmdList.add(pipe.getInputPipe());
@@ -278,19 +334,10 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		String[] cmdArray = new String[cmdList.size()];
 		cmdList.toArray(cmdArray);
 
-		// Hook to allow plugins to customize this command line
-		cmdArray = finalizeTranscoderArgs(
-			filename,
-			dlna,
-			media,
-			params,
-			cmdArray
-		);
-
 		// Now launch FFmpeg
 		ProcessWrapperImpl pw = new ProcessWrapperImpl(cmdArray, params);
 		parseMediaInfo(filename, dlna, pw); // Better late than never
-		pw.attachProcess(mkfifo_process); // Clean up the mkfifo process when the transcode ends
+		pw.attachProcess(mkfifoProcess); // Clean up the mkfifo process when the transcode ends
 
 		// Give the mkfifo process a little time
 		try {
@@ -308,19 +355,13 @@ public class FFmpegWebVideo extends FFMpegVideo {
 			LOGGER.error("Thread interrupted while waiting for transcode to start", e);
 		}
 
+		configuration = prev;
 		return pw;
 	}
 
 	@Override
 	public String name() {
-		return "FFmpeg Web Video";
-	}
-
-	// TODO remove this when it's removed from Player
-	@Deprecated
-	@Override
-	public String[] args() {
-		return null;
+		return NAME;
 	}
 
 	/**
@@ -329,45 +370,42 @@ public class FFmpegWebVideo extends FFMpegVideo {
 	@Override
 	public boolean isCompatible(DLNAResource resource) {
 		if (PlayerUtil.isWebVideo(resource)) {
-			String url = resource.getSystemName();
-			return protocols.contains(url.split(":")[0]) && excludes.match(url) == null;
-		}
+			String url = resource.getFileName();
 
-		return false;
-	}
-
-	public boolean readWebFilters(String filename) {
-		PatternMap filter = null;
-		String line;
-		try {
-			LineIterator it = FileUtils.lineIterator(new File(filename));
-			try {
-				while (it.hasNext()) {
-					line = it.nextLine().trim();
-					if (line.isEmpty() || line.startsWith("#")) {
-						// continue
-					} else if (line.equals("EXCLUDE")) {
-						filter = excludes;
-					} else if (line.equals("OPTIONS")) {
-						filter = autoOptions;
-					} else if (line.equals("REPLACE")) {
-						filter = replacements;
-					} else if (filter != null) {
-						String[] var = line.split(" \\| ", 2);
-						filter.add(var[0], var.length > 1 ? var[1] : null);
-					}
+			ExecutableInfo executableInfo = programInfo.getExecutableInfo(currentExecutableType);
+			if (executableInfo instanceof FFmpegExecutableInfo) {
+				List<String> protocols = FFmpegOptions.getSupportedProtocols(executableInfo.getPath());
+				if (protocols == null || !protocols.contains(url.split(":")[0])) {
+					return false;
 				}
-				return true;
-			} finally {
-				it.close();
+			} else {
+				LOGGER.warn(
+					"Couldn't check {} protocol compatibility for \"{}\", reporting as not compatible",
+					getClass().getSimpleName(),
+					url.split(":")[0]
+				);
+				return false;
 			}
-		} catch (Exception e) {
-			LOGGER.debug("Error reading ffmpeg web filters: " + e.getLocalizedMessage());
+
+			// FFmpeg does not natively support YouTube videos
+			if (isYouTubeURL(url)) {
+				return false;
+			}
+
+			FILTERS_LOCK.readLock().lock();
+			try {
+				if (EXCLUDES.match(url) == null) {
+					return true;
+				}
+			} finally {
+				FILTERS_LOCK.readLock().unlock();
+			}
 		}
+
 		return false;
 	}
 
-	static final Matcher endOfHeader = Pattern.compile("Press \\[q\\]|A-V:|At least|Invalid").matcher("");
+	static final Matcher END_OF_HEADER = Pattern.compile("Press \\[q\\]|A-V:|At least|Invalid").matcher("");
 
 	/**
 	 * Parse media info from ffmpeg headers during playback
@@ -378,12 +416,12 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		} else if (dlna.getMedia().isFFmpegparsed()) {
 			return;
 		}
-		final ArrayList<String> lines = new ArrayList<String>();
+		final ArrayList<String> lines = new ArrayList<>();
 		final String input = filename.length() > 200 ? filename.substring(0, 199) : filename;
-		OutputTextLogger ffParser = new OutputTextLogger(null, pw) {
+		OutputTextLogger ffParser = new OutputTextLogger(null) {
 			@Override
 			public boolean filter(String line) {
-				if (endOfHeader.reset(line).find()) {
+				if (END_OF_HEADER.reset(line).find()) {
 					dlna.getMedia().parseFFmpegInfo(lines, input);
 					LOGGER.trace("[{}] parsed media from headers: {}", ID, dlna.getMedia());
 					dlna.getParent().updateChild(dlna);
@@ -396,10 +434,20 @@ public class FFmpegWebVideo extends FFMpegVideo {
 		ffParser.setFiltered(true);
 		pw.setStderrConsumer(ffParser);
 	}
+
+	public static boolean isYouTubeURL(String youTubeUrl) {
+		String pattern = "(?<=youtu.be/|watch\\?v=|/videos/|embed\\/)[^#\\&\\?]*";
+		Pattern compiledPattern = Pattern.compile(pattern);
+		Matcher matcher = compiledPattern.matcher(youTubeUrl);
+		if (matcher.find()) {
+			return true;
+		}
+		return false;
+	}
 }
 
 // A self-combining map of regexes that recompiles if modified
-class PatternMap<T> extends modAwareHashMap<String, T> {
+class PatternMap<T> extends ModAwareHashMap<String, T> {
 	private static final long serialVersionUID = 3096452459003158959L;
 	Matcher combo;
 	List<String> groupmap = new ArrayList<>();
@@ -430,7 +478,7 @@ class PatternMap<T> extends modAwareHashMap<String, T> {
 		groupmap.clear();
 		for (String regex : this.keySet()) {
 			// add each regex as a capture group
-			joined.append("|(").append(regex).append(")");
+			joined.append("|(").append(regex).append(')');
 			// map all subgroups to the parent
 			for (int i = 0; i < Pattern.compile(regex).matcher("").groupCount() + 1; i++) {
 				groupmap.add(regex);
@@ -444,7 +492,7 @@ class PatternMap<T> extends modAwareHashMap<String, T> {
 
 // A HashMap that reports whether it's been modified
 // (necessary because 'modCount' isn't accessible outside java.util)
-class modAwareHashMap<K, V> extends HashMap<K, V> {
+class ModAwareHashMap<K, V> extends HashMap<K, V> {
 	private static final long serialVersionUID = -5334451082377480129L;
 	public boolean modified = false;
 

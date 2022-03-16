@@ -20,7 +20,7 @@ if $cygwin ; then
 fi
 
 # Setup PMS_HOME
-if [ "x$PMS_HOME" = "x" ]; then
+if [ -z "$PMS_HOME" ]; then
     PMS_HOME="$DIRNAME"
 fi
 
@@ -29,12 +29,17 @@ export PMS_HOME
 cd "$PMS_HOME"
 
 # Setup the JVM
-if [ "x$JAVA" = "x" ]; then
-    if [ "x$JAVA_HOME" != "x" ]; then
-		JAVA="$JAVA_HOME/bin/java"
+if [ -z "$JAVA" ]; then
+    if [ -z "$JAVA_HOME" ]; then
+        JAVA="java"
     else
-		JAVA="java"
+        JAVA="$JAVA_HOME/bin/java"
     fi
+fi
+
+# Use our JVM if it exists
+if [ -f jre8/bin/java ]; then
+    JAVA="jre8/bin/java"
 fi
 
 # Setup the classpath
@@ -47,16 +52,21 @@ if $cygwin; then
     PMS_HOME=`cygpath --path --windows "$PMS_HOME"`
     JAVA_HOME=`cygpath --path --windows "$JAVA_HOME"`
 fi
- 
+
 # Configure fontconfig (used by our build of FFmpeg)
-if [ "x$FONTCONFIG_PATH" = "x" ]; then
+if [ -z "$FONTCONFIG_PATH" ]; then
     FONTCONFIG_PATH=/etc/fonts
     export FONTCONFIG_PATH
 fi
-if [ "x$FONTCONFIG_FILE" = "x" ]; then
+if [ -z "$FONTCONFIG_FILE" ]; then
     FONTCONFIG_FILE=/etc/fonts/fonts.conf
     export FONTCONFIG_FILE
 fi
 
+# Provide a means of setting max memory using an environment variable
+if [ -z "$UMS_MAX_MEMORY" ]; then
+    UMS_MAX_MEMORY=1280M
+fi
+
 # Execute the JVM
-exec "$JAVA" $JAVA_OPTS -Xmx768M -Xss2048k -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true -Djna.nosys=true -classpath "$PMS_JARS" net.pms.PMS "$@"
+exec "$JAVA" $JAVA_OPTS -Xmx$UMS_MAX_MEMORY -Xss2048k -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true -Djna.nosys=true -classpath "$PMS_JARS" net.pms.PMS "$@"

@@ -22,50 +22,47 @@ import com.jgoodies.forms.builder.PanelBuilder;
 import com.jgoodies.forms.factories.Borders;
 import com.jgoodies.forms.layout.CellConstraints;
 import com.jgoodies.forms.layout.FormLayout;
+import com.sun.jna.Platform;
 import java.awt.Font;
 import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.text.CharacterIterator;
-import java.text.StringCharacterIterator;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.JLabel;
 import net.pms.Messages;
-import net.pms.PMS;
+import net.pms.configuration.DeviceConfiguration;
+import net.pms.configuration.ExecutableInfo;
+import net.pms.configuration.ExecutableInfo.ExecutableInfoBuilder;
+import net.pms.configuration.ExternalProgramInfo;
+import net.pms.configuration.FFmpegExecutableInfo.FFmpegExecutableInfoBuilder;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
 import net.pms.dlna.DLNAMediaInfo;
+import net.pms.dlna.DLNAMediaSubtitle;
 import net.pms.dlna.DLNAResource;
-import net.pms.dlna.FileTranscodeVirtualFolder;
 import net.pms.dlna.InputFile;
 import net.pms.formats.Format;
 import net.pms.formats.v2.SubtitleType;
-import net.pms.formats.v2.SubtitleUtils;
-import net.pms.io.OutputParams;
-import net.pms.io.PipeIPCProcess;
-import net.pms.io.PipeProcess;
-import net.pms.io.ProcessWrapper;
-import net.pms.io.ProcessWrapperImpl;
-import net.pms.io.StreamModifier;
-import net.pms.io.OutputTextLogger;
+import net.pms.io.*;
 import net.pms.network.HTTPResource;
-import net.pms.util.FileUtil;
+import net.pms.newgui.GuiUtil;
+import net.pms.platform.windows.NTStatus;
+import net.pms.util.CodecUtil;
 import net.pms.util.PlayerUtil;
 import net.pms.util.ProcessUtil;
-import org.apache.commons.io.FileUtils;
-import static net.pms.util.StringUtil.*;
-import org.apache.commons.io.FilenameUtils;
+import net.pms.util.StringUtil;
+import net.pms.util.SubtitleUtils;
+import net.pms.util.Version;
 import org.apache.commons.lang3.StringUtils;
 import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
@@ -96,20 +93,19 @@ import org.slf4j.LoggerFactory;
  */
 public class FFMpegVideo extends Player {
 	private static final Logger LOGGER = LoggerFactory.getLogger(FFMpegVideo.class);
+	public static final PlayerId ID = StandardPlayerId.FFMPEG_VIDEO;
+
+	/** The {@link Configuration} key for the custom FFmpeg path. */
+	public static final String KEY_FFMPEG_PATH = "ffmpeg_path";
+
+	/** The {@link Configuration} key for the FFmpeg executable type. */
+	public static final String KEY_FFMPEG_EXECUTABLE_TYPE = "ffmpeg_executable_type";
+	public static final String NAME = "FFmpeg Video";
 	private static final String DEFAULT_QSCALE = "3";
-	private static final String SUB_DIR = "subs";
 
-	public FFMpegVideo() {
+	// Not to be instantiated by anything but PlayerFactory
+	FFMpegVideo() {
 	}
-
-	@Deprecated
-	public FFMpegVideo(PmsConfiguration configuration) {
-		this();
-	}
-
-	// FIXME we have an id() accessor for this; no need for the field to be public
-	@Deprecated
-	public static final String ID = "ffmpegvideo";
 
 	/**
 	 * Returns a list of strings representing the rescale options for this transcode i.e. the ffmpeg -vf
@@ -126,112 +122,198 @@ public class FFMpegVideo extends Player {
 	 */
 	public List<String> getVideoFilterOptions(DLNAResource dlna, DLNAMediaInfo media, OutputParams params) throws IOException {
 		List<String> videoFilterOptions = new ArrayList<>();
-		String filterOption = "-vf";
 		ArrayList<String> filterChain = new ArrayList<>();
-		final RendererConfiguration renderer = params.mediaRenderer;
+		ArrayList<String> scalePadFilterChain = new ArrayList<>();
+		final RendererConfiguration renderer = params.getMediaRenderer();
 
 		boolean isMediaValid = media != null && media.isMediaparsed() && media.getHeight() != 0;
-		boolean isResolutionTooHighForRenderer = renderer.isVideoRescale() && isMediaValid && // renderer defines a max width/height
-			(
-				media.getWidth() > renderer.getMaxVideoWidth() ||
-				media.getHeight() > renderer.getMaxVideoHeight()
-			);
+		boolean isResolutionTooHighForRenderer = isMediaValid && !params.getMediaRenderer().isResolutionCompatibleWithRenderer(media.getWidth(), media.getHeight());
 
-		if (!isDisableSubtitles(params)) {
+		int scaleWidth = 0;
+		int scaleHeight = 0;
+		if (media.getWidth() > 0 && media.getHeight() > 0) {
+			scaleWidth = media.getWidth();
+			scaleHeight = media.getHeight();
+		}
+
+		boolean is3D = media.is3d() && !media.stereoscopyIsAnaglyph();
+
+		// Make sure the aspect ratio is 16/9 if the renderer needs it.
+		boolean keepAR = (renderer.isKeepAspectRatio() || renderer.isKeepAspectRatioTranscoding()) &&
+				!media.is3dFullSbsOrOu() &&
+				!"16:9".equals(media.getAspectRatioContainer());
+
+		// Scale and pad the video if necessary
+		if (isResolutionTooHighForRenderer || (!renderer.isRescaleByRenderer() && renderer.isMaximumResolutionSpecified() && media.getWidth() < 720)) { // Do not rescale for SD video and higher
+			if (media.is3dFullSbsOrOu()) {
+				scalePadFilterChain.add(String.format("scale=%1$d:%2$d", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
+			} else {
+				scalePadFilterChain.add(String.format("scale=iw*min(%1$d/iw\\,%2$d/ih):ih*min(%1$d/iw\\,%2$d/ih)", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
+
+				if (keepAR) {
+					scalePadFilterChain.add(String.format("pad=%1$d:%2$d:(%1$d-iw)/2:(%2$d-ih)/2", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
+				}
+			}
+		} else if (keepAR && isMediaValid) {
+			if ((media.getWidth() / (double) media.getHeight()) >= (16 / (double) 9)) {
+				scalePadFilterChain.add("pad=iw:iw/(16/9):0:(oh-ih)/2");
+				scaleHeight = (int) Math.round(scaleWidth / (16 / (double) 9));
+			} else {
+				scalePadFilterChain.add("pad=ih*(16/9):ih:(ow-iw)/2:0");
+				scaleWidth = (int) Math.round(scaleHeight * (16 / (double) 9));
+			}
+
+			scaleWidth  = convertToModX(scaleWidth, 4);
+			scaleHeight = convertToModX(scaleHeight, 4);
+
+			// Make sure we didn't exceed the renderer's maximum resolution.
+			if (
+				scaleHeight > renderer.getMaxVideoHeight() ||
+				scaleWidth  > renderer.getMaxVideoWidth()
+			) {
+				scaleHeight = renderer.getMaxVideoHeight();
+				scaleWidth  = renderer.getMaxVideoWidth();
+			}
+
+			scalePadFilterChain.add("scale=" + scaleWidth + ":" + scaleHeight);
+		}
+
+		filterChain.addAll(scalePadFilterChain);
+
+		boolean override = true;
+		if (renderer instanceof RendererConfiguration.OutputOverride) {
+			RendererConfiguration.OutputOverride or = (RendererConfiguration.OutputOverride) renderer;
+			override = or.addSubtitles();
+		}
+
+		if (!isDisableSubtitles(params) && override) {
+			boolean isSubsManualTiming = true;
+			DLNAMediaSubtitle convertedSubs = dlna.getMediaSubtitle();
 			StringBuilder subsFilter = new StringBuilder();
+			if (params.getSid() != null && params.getSid().getType().isText()) {
+				boolean isSubsASS = params.getSid().getType() == SubtitleType.ASS;
+				String originalSubsFilename = null;
+				if (is3D) {
+					if (convertedSubs != null && convertedSubs.getConvertedFile() != null) { // subs are already converted to 3D so use them
+						originalSubsFilename = convertedSubs.getConvertedFile().getAbsolutePath();
+					} else if (!isSubsASS) { // When subs are not converted and they are not in the ASS format and video is 3D then subs need conversion to 3D
+						File subtitlesFile = SubtitleUtils.getSubtitles(dlna, media, params, configuration, SubtitleType.ASS);
+						if (subtitlesFile != null) {
+							originalSubsFilename = subtitlesFile.getAbsolutePath();
+						} else {
+							LOGGER.error("External subtitles file \"{}\" is unavailable", params.getSid().getName());
+						}
+					} else {
+						if (params.getSid().getExternalFile() != null) {
+							originalSubsFilename = params.getSid().getExternalFile().getPath();
+						} else {
+							LOGGER.error("External subtitles file \"{}\" is unavailable", params.getSid().getName());
+						}
+					}
+				} else if (params.getSid().isExternal()) {
+					if (params.getSid().getExternalFile() != null) {
+						if (
+							!renderer.streamSubsForTranscodedVideo() ||
+							!renderer.isExternalSubtitlesFormatSupported(params.getSid(), dlna)
+						) {
+							// Only transcode subtitles if they aren't streamable
+							originalSubsFilename = params.getSid().getExternalFile().getPath();
+						}
+					} else {
+						LOGGER.error("External subtitles file \"{}\" is unavailable", params.getSid().getName());
+					}
+				} else {
+					originalSubsFilename = dlna.getFileName();
+				}
 
-			if (params.sid.getType().isText()) {
-				File tempSubs = getSubtitles(dlna, media, params);
-				if (tempSubs != null) {
-					StringBuilder s = new StringBuilder();
-					CharacterIterator it = new StringCharacterIterator(tempSubs.getAbsolutePath());
+				if (originalSubsFilename != null) {
+					subsFilter.append("subtitles=").append(StringUtil.ffmpegEscape(originalSubsFilename));
+					if (params.getSid().isEmbedded()) {
+						subsFilter.append(":si=").append(params.getSid().getId());
+					}
 
-					for (char ch = it.first(); ch != CharacterIterator.DONE; ch = it.next()) {
-						switch (ch) {
-							case ':':
-								s.append("\\\\:");
-								break;
-							case '\\':
-								s.append("/");
-								break;
-							case ']':
-							case '[':
-								s.append("\\");
-							default:
-								s.append(ch);
-								break;
+					// Set the input subtitles character encoding if not UTF-8
+					if (!params.getSid().isSubsUtf8()) {
+						if (isNotBlank(configuration.getSubtitlesCodepage())) {
+							subsFilter.append(":charenc=").append(configuration.getSubtitlesCodepage());
+						} else if (params.getSid().getSubCharacterSet() != null) {
+							subsFilter.append(":charenc=").append(params.getSid().getSubCharacterSet());
 						}
 					}
 
-					String subsFile = s.toString();
-					subsFile = subsFile.replace(",", "\\,");
+					// If the FFmpeg font config is enabled than we need to add settings to the filter. TODO there could be also changed the font type. See http://ffmpeg.org/ffmpeg-filters.html#subtitles-1
+					if (configuration.isFFmpegFontConfig() && !is3D && !isSubsASS) { // Do not force style for 3D videos and ASS subtitles
+						subsFilter.append(":force_style=");
+						subsFilter.append("'");
+						String fontName = configuration.getFont();
+						if (isNotBlank(fontName)) {
+							String font = CodecUtil.isFontRegisteredInOS(fontName);
+							if (font != null) {
+								subsFilter.append("Fontname=").append(font);
+							}
+						}
 
-					if (params.sid.isEmbedded() || (params.sid.isExternal() && params.sid.getType() == SubtitleType.ASS)) {
-						subsFilter.append("ass=");
-						subsFilter.append(subsFile);
-					} else if (params.sid.isExternal() && params.sid.getType() == SubtitleType.SUBRIP) {
-						subsFilter.append("subtitles=");
-						subsFilter.append(subsFile);
+						// XXX (valib) If the font size is not acceptable it could be calculated better taking in to account the original video size. Unfortunately I don't know how to do that.
+						subsFilter.append(",Fontsize=").append(15 * Double.parseDouble(configuration.getAssScale()));
+						subsFilter.append(",PrimaryColour=").append(configuration.getSubsColor().getASSv4StylesHexValue());
+						subsFilter.append(",Outline=").append(configuration.getAssOutline());
+						subsFilter.append(",Shadow=").append(configuration.getAssShadow());
+						subsFilter.append(",MarginV=").append(configuration.getAssMargin());
+						subsFilter.append("'");
 					}
 				}
-
-			} else if (params.sid.getType().isPicture()) {
-				filterOption = "-filter_complex";
-				if (params.sid.getId() < 100) {
+			} else if (params.getSid().getType().isPicture()) {
+				StringBuilder subsPictureFilter = new StringBuilder();
+				if (params.getSid().isEmbedded()) {
 					// Embedded
-					subsFilter.append("[0:v][0:s:").append(media.getSubtitleTracksList().indexOf(params.sid)).append("]overlay");
-				} else {
+					subsPictureFilter.append("[0:v][0:s:").append(media.getSubtitlesTracks().indexOf(params.getSid())).append("]overlay");
+					isSubsManualTiming = false;
+				} else if (params.getSid().getExternalFile() != null) {
 					// External
 					videoFilterOptions.add("-i");
-					videoFilterOptions.add(params.sid.getExternalFile().getAbsolutePath());
-					subsFilter.append("[0:v][1:s]overlay"); // this assumes the sub file is single-language
+					videoFilterOptions.add(params.getSid().getExternalFile().getPath());
+					subsPictureFilter.append("[0:v][1:s]overlay"); // this assumes the sub file is single-language
 				}
+				filterChain.add(0, subsPictureFilter.toString());
 			}
 
 			if (isNotBlank(subsFilter)) {
+				if (params.getTimeSeek() > 0 && isSubsManualTiming) {
+					filterChain.add("setpts=PTS+" + params.getTimeSeek() + "/TB"); // based on https://trac.ffmpeg.org/ticket/2067
+				}
+
 				filterChain.add(subsFilter.toString());
-				// based on https://trac.ffmpeg.org/ticket/2067
-				if (params.timeseek > 0) {
-					videoFilterOptions.add("-copyts");
-					videoFilterOptions.add("-copypriorss");
-					videoFilterOptions.add("0");
-					videoFilterOptions.add("-avoid_negative_ts");
-					videoFilterOptions.add("1");
-					videoFilterOptions.add("-af");
-					videoFilterOptions.add("asetpts=PTS-" + params.timeseek + "/TB");
-					filterChain.add("setpts=PTS-" + params.timeseek + "/TB");
+				if (params.getTimeSeek() > 0 && isSubsManualTiming) {
+					filterChain.add("setpts=PTS-STARTPTS"); // based on https://trac.ffmpeg.org/ticket/2067
 				}
 			}
 		}
 
 		String overrideVF = renderer.getFFmpegVideoFilterOverride();
-
-		if (overrideVF != null) {
+		if (StringUtils.isNotEmpty(overrideVF)) {
 			filterChain.add(overrideVF);
-		} else {
-			// disable keepAspectRatio for 3D SBS or TB video, use only rescale if needed
-			boolean keepAR = renderer.isKeepAspectRatio() &&
-					!(
-						media.getWidth() == 3840 && media.getHeight() <= 1080 ||
-						media.getWidth() == 1920 && media.getHeight() == 2160
-					);
-			if (isResolutionTooHighForRenderer || (!renderer.isRescaleByRenderer() && renderer.isVideoRescale() && media.getWidth() < 720)) { // Do not rescale for SD video and higher
-				filterChain.add(String.format("scale=iw*min(%1$d/iw\\,%2$d/ih):ih*min(%1$d/iw\\,%2$d/ih)", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
-				if (keepAR) {
-					filterChain.add(String.format("pad=%1$d:%2$d:(%1$d-iw)/2:(%2$d-ih)/2", renderer.getMaxVideoWidth(), renderer.getMaxVideoHeight()));
-				}
-			} else if (keepAR && isMediaValid) {
-				if ((media.getWidth() / (double) media.getHeight()) >= (16 / (double) 9)) {
-					filterChain.add("pad=iw:iw/(16/9):0:(oh-ih)/2");
-				} else {
-					filterChain.add("pad=ih*(16/9):ih:(ow-iw)/2:0");
-				}
-			}
+		}
+
+		// Convert 3D video to the other output 3D format or to 2D using "Output3DFormat = ml" or "Output3DFormat = mr" in the renderer conf
+		String stereoLayout = null;
+		String renderer3DOutputFormat = null;
+		if (media.get3DLayout() != null) {
+			stereoLayout = media.get3DLayout().toString().toLowerCase(Locale.ROOT);
+			renderer3DOutputFormat = params.getMediaRenderer().getOutput3DFormat();
+		}
+
+		if (
+			is3D &&
+			stereoLayout != null &&
+			isNotBlank(renderer3DOutputFormat) &&
+			!stereoLayout.equals(renderer3DOutputFormat)
+		) {
+			filterChain.add("stereo3d=" + stereoLayout + ":" + renderer3DOutputFormat);
 		}
 
 		if (filterChain.size() > 0) {
-			videoFilterOptions.add(filterOption);
-			videoFilterOptions.add(StringUtils.join(filterChain, ", "));
+			videoFilterOptions.add("-filter_complex");
+			videoFilterOptions.add(StringUtils.join(filterChain, ","));
 		}
 
 		return videoFilterOptions;
@@ -246,17 +328,28 @@ public class FFMpegVideo extends Player {
 	 * @param dlna
 	 * @param media the media metadata for the video being streamed. May contain unset/null values (e.g. for web videos).
 	 * @param params output parameters
+	 * @param canMuxVideoWithFFmpeg
 	 *
 	 * @return a {@link List} of <code>String</code>s representing the FFmpeg output parameters for the renderer according
 	 * to its <code>TranscodeVideo</code> profile.
 	 */
-	public synchronized List<String> getVideoTranscodeOptions(DLNAResource dlna, DLNAMediaInfo media, OutputParams params) {
+	@SuppressWarnings("checkstyle:EmptyBlock")
+	public synchronized List<String> getVideoTranscodeOptions(DLNAResource dlna, DLNAMediaInfo media, OutputParams params, boolean canMuxVideoWithFFmpeg) {
 		List<String> transcodeOptions = new ArrayList<>();
-		final String filename = dlna.getSystemName();
-		final RendererConfiguration renderer = params.mediaRenderer;
+		final String filename = dlna.getFileName();
+		final RendererConfiguration renderer = params.getMediaRenderer();
 		String customFFmpegOptions = renderer.getCustomFFmpegOptions();
 
-		if (renderer.isTranscodeToWMV() && !renderer.isXBOX()) { // WMV
+		if (
+			(
+				renderer.isTranscodeToWMV() &&
+				!renderer.isXbox360()
+			) ||
+			(
+				renderer.isXboxOne() &&
+				purpose() == VIDEO_WEBSTREAM_PLAYER
+			)
+		) { // WMV
 			transcodeOptions.add("-c:v");
 			transcodeOptions.add("wmv2");
 
@@ -267,21 +360,27 @@ public class FFMpegVideo extends Player {
 
 			transcodeOptions.add("-f");
 			transcodeOptions.add("asf");
-		} else { // MPEGPSAC3, MPEGTSAC3 or H264TSAC3
-			final boolean isTsMuxeRVideoEngineEnabled = configuration.getEnginesAsList(PMS.get().getRegistry()).contains(TsMuxeRVideo.ID);
+		} else { // MPEGPSMPEG2AC3, MPEGTSMPEG2AC3, MPEGTSH264AC3 or MPEGTSH264AAC
+			final boolean isTsMuxeRVideoEngineActive = PlayerFactory.isPlayerActive(TsMuxeRVideo.ID);
 
 			// Output audio codec
-			dtsRemux = isTsMuxeRVideoEngineEnabled &&
+			dtsRemux = isTsMuxeRVideoEngineActive &&
 				configuration.isAudioEmbedDtsInPcm() &&
-				params.aid != null &&
-				params.aid.isDTS() &&
+				params.getAid() != null &&
+				params.getAid().isDTS() &&
 				!avisynth() &&
 				renderer.isDTSPlayable();
-			
-			boolean isSubtitlesAndTimeseek = !isDisableSubtitles(params) && params.timeseek > 0;
 
-			if (configuration.isAudioRemuxAC3() && params.aid != null && params.aid.isAC3() && !avisynth() && renderer.isTranscodeToAC3() && !isSubtitlesAndTimeseek) {
-				// AC-3 remux
+			boolean isSubtitlesAndTimeseek = !isDisableSubtitles(params) && params.getTimeSeek() > 0;
+
+			if (
+				configuration.isAudioRemuxAC3() &&
+				params.getAid() != null &&
+				renderer.isAudioStreamTypeSupportedInTranscodingContainer(params.getAid()) &&
+				!avisynth() &&
+				!isSubtitlesAndTimeseek
+			) {
+				// AC-3 and AAC remux
 				if (!customFFmpegOptions.contains("-c:a ")) {
 					transcodeOptions.add("-c:a");
 					transcodeOptions.add("copy");
@@ -292,8 +391,11 @@ public class FFMpegVideo extends Player {
 					transcodeOptions.add("-an");
 				} else if (type() == Format.AUDIO) {
 					// Skip
-				} else {
-					if (!customFFmpegOptions.contains("-c:a ")) {
+				} else if (!customFFmpegOptions.matches(".*-(c:a|codec:a|acodec).*")) {
+					if (renderer.isTranscodeToAAC()) {
+						transcodeOptions.add("-c:a");
+						transcodeOptions.add("aac");
+					} else if (!customFFmpegOptions.contains("-c:a ")) {
 						transcodeOptions.add("-c:a");
 						transcodeOptions.add("ac3");
 					}
@@ -304,32 +406,68 @@ public class FFMpegVideo extends Player {
 			if (filename != null) {
 				newInput = new InputFile();
 				newInput.setFilename(filename);
-				newInput.setPush(params.stdin);
+				newInput.setPush(params.getStdIn());
 			}
 
 			// Output video codec
-			if (renderer.isTranscodeToH264TSAC3()) {
-				transcodeOptions.add("-c:v");
-				transcodeOptions.add("libx264");
-				transcodeOptions.add("-preset");
-				transcodeOptions.add("superfast");
-				transcodeOptions.add("-level");
-				transcodeOptions.add("31");
-				transcodeOptions.add("-pix_fmt");
-				transcodeOptions.add("yuv420p");
+
+			// This may be useful in the future for better muxing support
+			// Set a temporary container to see if the renderer would accept this media wrapped in our transcoding container
+//			String originalContainer = media.getContainer();
+//			if (renderer.isTranscodeToMPEGTS()) {
+//				media.setContainer("mpegts");
+//			} else {
+//				media.setContainer("mpegps");
+//			}
+//			dlna.setMedia(media);
+//			if (renderer.getFormatConfiguration().getMatchedMIMEtype(dlna) != null) {
+//				media.setContainer(originalContainer);
+//				dlna.setMedia(media);
+//				transcodeOptions.add("-c:v");
+//				transcodeOptions.add("copy");
+			if (renderer.isTranscodeToH264() || renderer.isTranscodeToH265()) {
+				if (canMuxVideoWithFFmpeg && renderer.isVideoStreamTypeSupportedInTranscodingContainer(media)) {
+					if (!customFFmpegOptions.contains("-c:v")) {
+						transcodeOptions.add("-c:v");
+						transcodeOptions.add("copy");
+					}
+				} else {
+					if (!customFFmpegOptions.contains("-c:v")) {
+						transcodeOptions.add("-c:v");
+						if (renderer.isTranscodeToH264()) {
+							transcodeOptions.add("libx264");
+						} else {
+							transcodeOptions.add("libx265");
+						}
+						transcodeOptions.add("-tune");
+						transcodeOptions.add("zerolatency");
+					}
+					if (!customFFmpegOptions.contains("-preset")) {
+						transcodeOptions.add("-preset");
+						transcodeOptions.add("ultrafast");
+					}
+					if (!customFFmpegOptions.contains("-level")) {
+						transcodeOptions.add("-level");
+						transcodeOptions.add("31");
+					}
+					transcodeOptions.add("-pix_fmt");
+					transcodeOptions.add("yuv420p");
+				}
 			} else if (!dtsRemux) {
 				transcodeOptions.add("-c:v");
 				transcodeOptions.add("mpeg2video");
 			}
 
-			// Output file format
-			transcodeOptions.add("-f");
-			if (dtsRemux) {
-				transcodeOptions.add("mpeg2video");
-			} else if (renderer.isTranscodeToMPEGTSAC3() || renderer.isTranscodeToH264TSAC3()) { // MPEGTSAC3
-				transcodeOptions.add("mpegts");
-			} else { // default: MPEGPSAC3
-				transcodeOptions.add("vob");
+			if (!customFFmpegOptions.contains("-f")) {
+				// Output file format
+				transcodeOptions.add("-f");
+				if (dtsRemux) {
+					transcodeOptions.add("mpeg2video");
+				} else if (renderer.isTranscodeToMPEGTS()) {
+					transcodeOptions.add("mpegts");
+				} else {
+					transcodeOptions.add("vob");
+				}
 			}
 		}
 
@@ -347,30 +485,50 @@ public class FFMpegVideo extends Player {
 	 */
 	public List<String> getVideoBitrateOptions(DLNAResource dlna, DLNAMediaInfo media, OutputParams params) {
 		List<String> videoBitrateOptions = new ArrayList<>();
+		boolean low = false;
 
-		int defaultMaxBitrates[] = getVideoBitrateConfig(configuration.getMaximumBitrate());
-		int rendererMaxBitrates[] = new int[2];
+		int[] defaultMaxBitrates = getVideoBitrateConfig(configuration.getMaximumBitrate());
+		int[] rendererMaxBitrates = new int[2];
 
-		if (params.mediaRenderer.getMaxVideoBitrate() != null) {
-			rendererMaxBitrates = getVideoBitrateConfig(params.mediaRenderer.getMaxVideoBitrate());
+		if (params.getMediaRenderer().getMaxVideoBitrate() > 0) {
+			rendererMaxBitrates = getVideoBitrateConfig(Integer.toString(params.getMediaRenderer().getMaxVideoBitrate()));
 		}
 
 		// Give priority to the renderer's maximum bitrate setting over the user's setting
 		if (rendererMaxBitrates[0] > 0 && rendererMaxBitrates[0] < defaultMaxBitrates[0]) {
+			LOGGER.trace(
+				"Using video bitrate limit from {} configuration ({} Mb/s) because " +
+				"it is lower than the general configuration bitrate limit ({} Mb/s)",
+				params.getMediaRenderer().getRendererName(),
+				rendererMaxBitrates[0],
+				defaultMaxBitrates[0]
+			);
 			defaultMaxBitrates = rendererMaxBitrates;
-			LOGGER.trace("Using the video bitrate limit from the renderer config (" + rendererMaxBitrates[0] + ") which is lower than the one from the program settings (" + defaultMaxBitrates[0] + ")");
 		} else {
-			LOGGER.trace("Using the video bitrate limit from the program settings (" + defaultMaxBitrates[0] + ")");
+			LOGGER.trace(
+				"Using video bitrate limit from the general configuration ({} Mb/s)",
+				defaultMaxBitrates[0]
+			);
 		}
 
-		if (params.mediaRenderer.getCBRVideoBitrate() == 0 && params.timeend == 0) {
-			// Convert value from Mb to Kb
-			defaultMaxBitrates[0] = 1000 * defaultMaxBitrates[0];
+		boolean isXboxOneWebVideo = params.getMediaRenderer().isXboxOne() && purpose() == VIDEO_WEBSTREAM_PLAYER;
+		int maximumBitrate = defaultMaxBitrates[0];
 
-			// Halve it since it seems to send up to 1 second of video in advance
-			defaultMaxBitrates[0] /= 2;
+		if (params.getMediaRenderer().getCBRVideoBitrate() == 0 && params.getTimeEnd() == 0) {
+			if (rendererMaxBitrates[0] < 0) {
+				// odd special case here
+				// this is -1 so we guess that 3000 kbps is good
+				defaultMaxBitrates[0] = 3000;
+				low = true;
+			} else {
+				// Convert value from Mb to Kb
+				defaultMaxBitrates[0] = 1000 * defaultMaxBitrates[0];
+			}
 
-			LOGGER.trace("Halving the video bitrate limit to " + defaultMaxBitrates[0]);
+			if (params.getMediaRenderer().isHalveBitrate() && !configuration.isAutomaticMaximumBitrate()) {
+				defaultMaxBitrates[0] /= 2;
+				LOGGER.trace("Halving the video bitrate limit to {} kb/s", defaultMaxBitrates[0]);
+			}
 
 			int bufSize = 1835;
 			boolean bitrateLevel41Limited = false;
@@ -383,14 +541,14 @@ public class FFMpegVideo extends Player {
 			 *
 			 * We also apply the correct buffer size in this section.
 			 */
-			if (params.mediaRenderer.isTranscodeToH264TSAC3()) {
+			if (!isXboxOneWebVideo && params.getMediaRenderer().isTranscodeToH264()) {
 				if (
-					params.mediaRenderer.isH264Level41Limited() &&
+					params.getMediaRenderer().isH264Level41Limited() &&
 					defaultMaxBitrates[0] > 31250
 				) {
 					defaultMaxBitrates[0] = 31250;
 					bitrateLevel41Limited = true;
-					LOGGER.trace("Adjusting the video bitrate limit to the H.264 Level 4.1-safe value of 31250");
+					LOGGER.trace("Adjusting the video bitrate limit to the H.264 Level 4.1-safe value of 31250 kb/s");
 				}
 				bufSize = defaultMaxBitrates[0];
 			} else {
@@ -406,7 +564,7 @@ public class FFMpegVideo extends Player {
 					bufSize = defaultMaxBitrates[1];
 				}
 
-				if (params.mediaRenderer.isDefaultVBVSize() && rendererMaxBitrates[1] == 0) {
+				if (params.getMediaRenderer().isDefaultVBVSize() && rendererMaxBitrates[1] == 0) {
 					bufSize = 1835;
 				}
 			}
@@ -421,51 +579,65 @@ public class FFMpegVideo extends Player {
 
 				// Round down to the nearest Mb
 				defaultMaxBitrates[0] = defaultMaxBitrates[0] / 1000 * 1000;
+				if (low) {
+					defaultMaxBitrates[0] = 3000;
+				}
 
-				LOGGER.trace("Adjusting the video bitrate limit to " + defaultMaxBitrates[0] + " to make room for audio");
+				LOGGER.trace(
+					"Adjusting the video bitrate limit to {} kb/s to make room for audio",
+					defaultMaxBitrates[0]
+				);
 			}
 
-			// FFmpeg uses bytes for inputs instead of kbytes like MEncoder
-			bufSize *= 1000;
-			defaultMaxBitrates[0] *= 1000;
-
-			videoBitrateOptions.add("-bufsize");
-			videoBitrateOptions.add(String.valueOf(bufSize));
-
-			videoBitrateOptions.add("-maxrate");
-			videoBitrateOptions.add(String.valueOf(defaultMaxBitrates[0]));
+			if (defaultMaxBitrates[0] > 0) {
+				videoBitrateOptions.add("-bufsize");
+				videoBitrateOptions.add(String.valueOf(bufSize) + "k");
+				videoBitrateOptions.add("-maxrate");
+				videoBitrateOptions.add(String.valueOf(defaultMaxBitrates[0]) + "k");
+			}
 		}
 
-		if (!params.mediaRenderer.isTranscodeToH264TSAC3()) {
+		if (isXboxOneWebVideo || !params.getMediaRenderer().isTranscodeToH264()) {
 			// Add MPEG-2 quality settings
 			String mpeg2Options = configuration.getMPEG2MainSettingsFFmpeg();
-			String mpeg2OptionsRenderer = params.mediaRenderer.getCustomFFmpegMPEG2Options();
+			String mpeg2OptionsRenderer = params.getMediaRenderer().getCustomFFmpegMPEG2Options();
 
 			// Renderer settings take priority over user settings
 			if (isNotBlank(mpeg2OptionsRenderer)) {
 				mpeg2Options = mpeg2OptionsRenderer;
-			} else if (mpeg2Options.contains("Automatic")) {
-				mpeg2Options = "-g 5 -q:v 1 -qmin 2 -qmax 3";
+			} else if (configuration.isAutomaticMaximumBitrate()) {
+				// when the automatic bandwidth is used than use the proper automatic MPEG2 setting
+				mpeg2Options = params.getMediaRenderer().getAutomaticVideoQuality();
+			}
 
-				// It has been reported that non-PS3 renderers prefer keyint 5 but prefer it for PS3 because it lowers the average bitrate
-				if (params.mediaRenderer.isPS3()) {
-					mpeg2Options = "-g 25 -q:v 1 -qmin 2 -qmax 3";
-				}
-
-				if (mpeg2Options.contains("Wireless") || defaultMaxBitrates[0] < 70) {
+			if (mpeg2Options.contains("Automatic")) {
+				if (mpeg2Options.contains("Wireless")) {
 					// Lower quality for 720p+ content
 					if (media.getWidth() > 1280) {
-						mpeg2Options = "-g 25 -qmax 7 -qmin 2";
+						mpeg2Options = "-g 25 -qmin 2 -qmax 7";
 					} else if (media.getWidth() > 720) {
-						mpeg2Options = "-g 25 -qmax 5 -qmin 2";
+						mpeg2Options = "-g 25 -qmin 2 -qmax 5";
+					} else {
+						mpeg2Options = "-g 25 -qmin 2 -qmax 3";
 					}
+				} else { // set the automatic wired quality
+					mpeg2Options = "-g 5 -q:v 1 -qmin 2 -qmax 3";
 				}
 			}
+
+			if (params.getMediaRenderer().isPS3()) {
+				// It has been reported that non-PS3 renderers prefer -g 5 but prefer 25 for PS3 because it lowers the average bitrate
+				mpeg2Options = "-g 25 -q:v 1 -qmin 2 -qmax 3";
+			}
+
 			String[] customOptions = StringUtils.split(mpeg2Options);
 			videoBitrateOptions.addAll(new ArrayList<>(Arrays.asList(customOptions)));
 		} else {
 			// Add x264 quality settings
 			String x264CRF = configuration.getx264ConstantRateFactor();
+			if (configuration.isAutomaticMaximumBitrate()) {
+				x264CRF = params.getMediaRenderer().getAutomaticVideoQuality();
+			}
 
 			// Remove comment from the value
 			if (x264CRF.contains("/*")) {
@@ -473,15 +645,27 @@ public class FFMpegVideo extends Player {
 			}
 
 			if (x264CRF.contains("Automatic")) {
-				x264CRF = "16";
-
-				// Lower CRF for 720p+ content
-				if (media.getWidth() > 720) {
+				if (x264CRF.contains("Wireless") || maximumBitrate < 70) {
 					x264CRF = "19";
+					// Lower quality for 720p+ content
+					if (media.getWidth() > 1280) {
+						x264CRF = "23";
+					} else if (media.getWidth() > 720) {
+						x264CRF = "22";
+					}
+				} else {
+					x264CRF = "16";
+
+					// Lower quality for 720p+ content
+					if (media.getWidth() > 720) {
+						x264CRF = "19";
+					}
 				}
 			}
-			videoBitrateOptions.add("-crf");
-			videoBitrateOptions.add(x264CRF);
+			if (isNotBlank(x264CRF) && !params.getMediaRenderer().nox264()) {
+				videoBitrateOptions.add("-crf");
+				videoBitrateOptions.add(x264CRF);
+			}
 		}
 
 		return videoBitrateOptions;
@@ -502,6 +686,9 @@ public class FFMpegVideo extends Player {
 		audioBitrateOptions.add("-q:a");
 		audioBitrateOptions.add(DEFAULT_QSCALE);
 
+		audioBitrateOptions.add("-ar");
+		audioBitrateOptions.add("" + params.getMediaRenderer().getTranscodedVideoAudioSampleRate());
+
 		return audioBitrateOptions;
 	}
 
@@ -514,9 +701,18 @@ public class FFMpegVideo extends Player {
 	}
 
 	@Override
-	// TODO make this static so it can replace ID, instead of having both
-	public String id() {
+	public PlayerId id() {
 		return ID;
+	}
+
+	@Override
+	public String getConfigurablePathKey() {
+		return KEY_FFMPEG_PATH;
+	}
+
+	@Override
+	public String getExecutableTypeKey() {
+		return KEY_FFMPEG_EXECUTABLE_TYPE;
 	}
 
 	@Override
@@ -543,7 +739,7 @@ public class FFMpegVideo extends Player {
 
 	@Override
 	public String name() {
-		return "FFmpeg";
+		return NAME;
 	}
 
 	@Override
@@ -565,8 +761,8 @@ public class FFMpegVideo extends Player {
 		return defaultArgsArray;
 	}
 
-	private int[] getVideoBitrateConfig(String bitrate) {
-		int bitrates[] = new int[2];
+	private static int[] getVideoBitrateConfig(String bitrate) {
+		int[] bitrates = new int[2];
 
 		if (bitrate.contains("(") && bitrate.contains(")")) {
 			bitrates[1] = Integer.parseInt(bitrate.substring(bitrate.indexOf('(') + 1, bitrate.indexOf(')')));
@@ -597,13 +793,13 @@ public class FFMpegVideo extends Player {
 	}
 
 	@Override
-	public String executable() {
-		return configuration.getFfmpegPath();
+	protected ExternalProgramInfo programInfo() {
+		return configuration.getFFmpegPaths();
 	}
 
 	@Override
 	public boolean isGPUAccelerationReady() {
-		return false;
+		return true;
 	}
 
 	@Override
@@ -612,10 +808,14 @@ public class FFMpegVideo extends Player {
 		DLNAMediaInfo media,
 		OutputParams params
 	) throws IOException {
-		final String filename = dlna.getSystemName();
+		final String filename = dlna.getFileName();
 		InputFile newInput = new InputFile();
 		newInput.setFilename(filename);
-		newInput.setPush(params.stdin);
+		newInput.setPush(params.getStdIn());
+		// Use device-specific pms conf
+		PmsConfiguration prev = configuration;
+		configuration = (DeviceConfiguration) params.getMediaRenderer();
+		RendererConfiguration renderer = params.getMediaRenderer();
 
 		/*
 		 * Check if the video track and the container report different aspect ratios
@@ -627,66 +827,6 @@ public class FFMpegVideo extends Player {
 			!media.getAspectRatioContainer().equals(media.getAspectRatioVideoTrack())
 		) {
 			aspectRatiosMatch = false;
-		}
-
-		// Decide whether to defer to tsMuxeR or continue to use FFmpeg
-		boolean deferToTsmuxer = true;
-		String prependTraceReason = "Not muxing the video stream with tsMuxeR via FFmpeg because ";
-		if (!configuration.isFFmpegMuxWithTsMuxerWhenCompatible()) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the user setting is disabled");
-		}
-		if (deferToTsmuxer == true && !configuration.getHideTranscodeEnabled() && dlna.isNoName() && (dlna.getParent() instanceof FileTranscodeVirtualFolder)) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the file is being played via a FFmpeg entry in the transcode folder.");
-		}
-		if (deferToTsmuxer == true && !params.mediaRenderer.isMuxH264MpegTS()) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the renderer does not support H.264 inside MPEG-TS.");
-		}
-		if (deferToTsmuxer == true && params.sid != null) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "we need to burn subtitles.");
-		}
-		if (deferToTsmuxer == true && avisynth()) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "we are using AviSynth.");
-		}
-		if (deferToTsmuxer == true && params.mediaRenderer.isH264Level41Limited() && !media.isVideoWithinH264LevelLimits(newInput, params.mediaRenderer)) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the video stream is not within H.264 level limits for this renderer.");
-		}
-		if (deferToTsmuxer == true && !media.isMuxable(params.mediaRenderer)) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the video stream is not muxable to this renderer");
-		}
-		if (deferToTsmuxer == true && !aspectRatiosMatch) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "we need to transcode to apply the correct aspect ratio.");
-		}
-		if (deferToTsmuxer == true && !params.mediaRenderer.isPS3() && filename.contains("WEB-DL")) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the version of tsMuxeR supported by this renderer does not support WEB-DL files.");
-		}
-		if (deferToTsmuxer == true && "bt.601".equals(media.getMatrixCoefficients())) {
-			deferToTsmuxer = false;
-			LOGGER.trace(prependTraceReason + "the colorspace probably isn't supported by the renderer.");
-		}
-		if (deferToTsmuxer) {
-			TsMuxeRVideo tv = new TsMuxeRVideo();
-			params.forceFps = media.getValidFps(false);
-
-			if (media.getCodecV() != null) {
-				if (media.isH264()) {
-					params.forceType = "V_MPEG4/ISO/AVC";
-				} else if (media.getCodecV().startsWith("mpeg2")) {
-					params.forceType = "V_MPEG-2";
-				} else if (media.getCodecV().equals("vc1")) {
-					params.forceType = "V_MS/VFW/WVC1";
-				}
-			}
-
-			return tv.launchTranscode(dlna, media, params);
 		}
 
 		/*
@@ -705,16 +845,17 @@ public class FFMpegVideo extends Player {
 		}
 
 		List<String> cmdList = new ArrayList<>();
-		RendererConfiguration renderer = params.mediaRenderer;
 		boolean avisynth = avisynth();
-		if (params.timeseek > 0) {
-			params.waitbeforestart = 200;
+		if (params.getTimeSeek() > 0) {
+			params.setWaitBeforeStart(1);
+		} else if (renderer.isTranscodeFastStart()) {
+			params.manageFastStart();
 		} else {
-			params.waitbeforestart = 2500;
+			params.setWaitBeforeStart(2500);
 		}
 
-		setAudioAndSubs(filename, media, params);
-		cmdList.add(executable());
+		setAudioAndSubs(dlna, params);
+		cmdList.add(getExecutable());
 
 		// Prevent FFmpeg timeout
 		cmdList.add("-y");
@@ -726,33 +867,71 @@ public class FFMpegVideo extends Player {
 			cmdList.add("fatal");
 		}
 
-		if (params.timeseek > 0) {
+		if (params.getTimeSeek() > 0) {
 			cmdList.add("-ss");
-			cmdList.add(String.valueOf((int) params.timeseek));
+			cmdList.add(String.valueOf(params.getTimeSeek()));
 		}
 
-		// Decoder threads
-		if (nThreads > 0) {
+		// Decoding threads and GPU deccding
+		if (nThreads > 0 && !configuration.isGPUAcceleration()) {
 			cmdList.add("-threads");
 			cmdList.add(String.valueOf(nThreads));
+		} else if (
+			configuration.isGPUAcceleration() &&
+			!avisynth &&
+			!configuration.getFFmpegGPUDecodingAccelerationMethod().equals(Messages.getString("FFmpeg.GPUDecodingAccelerationDisabled"))
+		) {
+			// GPU decoding method
+			if (configuration.getFFmpegGPUDecodingAccelerationMethod().trim().matches("(auto|cuvid|d3d11va|dxva2|vaapi|vdpau|videotoolbox|qsv)")) {
+				cmdList.add("-hwaccel");
+				cmdList.add(configuration.getFFmpegGPUDecodingAccelerationMethod().trim());
+			} else {
+				if (configuration.getFFmpegGPUDecodingAccelerationMethod().matches(".*-hwaccel +[a-z]+.*")) {
+					String[] hwaccelOptions = StringUtils.split(configuration.getFFmpegGPUDecodingAccelerationMethod());
+					cmdList.addAll(Arrays.asList(hwaccelOptions));
+				} else {
+					cmdList.add("-hwaccel");
+					cmdList.add("auto");
+				}
+			}
+
+			// GPU decoding threads
+			if (configuration.getFFmpegGPUDecodingAccelerationThreadNumber().trim().matches("^[0-9]+$")) {
+				if (Integer.parseInt(configuration.getFFmpegGPUDecodingAccelerationThreadNumber().trim()) > 0) {
+					cmdList.add("-threads");
+					cmdList.add(String.valueOf(configuration.getFFmpegGPUDecodingAccelerationThreadNumber().trim()));
+				}
+			} else {
+				cmdList.add("-threads");
+				cmdList.add("1");
+			}
 		}
 
-		final boolean isTsMuxeRVideoEngineEnabled = configuration.getEnginesAsList(PMS.get().getRegistry()).contains(TsMuxeRVideo.ID);
+		final boolean isTsMuxeRVideoEngineActive = PlayerFactory.isPlayerActive(TsMuxeRVideo.ID);
+		final boolean isXboxOneWebVideo = params.getMediaRenderer().isXboxOne() && purpose() == VIDEO_WEBSTREAM_PLAYER;
 
 		ac3Remux = false;
 		dtsRemux = false;
 
-		if (configuration.isAudioRemuxAC3() && params.aid != null && params.aid.isAC3() && !avisynth() && renderer.isTranscodeToAC3()) {
+		if (
+			configuration.isAudioRemuxAC3() &&
+			params.getAid() != null &&
+			params.getAid().isAC3() &&
+			!avisynth() &&
+			renderer.isTranscodeToAC3() &&
+			!isXboxOneWebVideo &&
+			params.getAid().getAudioProperties().getNumberOfChannels() <= configuration.getAudioChannelCount()
+		) {
 			// AC-3 remux takes priority
 			ac3Remux = true;
 		} else {
 			// Now check for DTS remux and LPCM streaming
-			dtsRemux = isTsMuxeRVideoEngineEnabled &&
+			dtsRemux = isTsMuxeRVideoEngineActive &&
 				configuration.isAudioEmbedDtsInPcm() &&
-				params.aid != null &&
-				params.aid.isDTS() &&
+				params.getAid() != null &&
+				params.getAid().isDTS() &&
 				!avisynth() &&
-				params.mediaRenderer.isDTSPlayable();
+				params.getMediaRenderer().isDTSPlayable();
 		}
 
 		String frameRateRatio = media.getValidFps(true);
@@ -761,25 +940,154 @@ public class FFMpegVideo extends Player {
 		// Input filename
 		cmdList.add("-i");
 		if (avisynth && !filename.toLowerCase().endsWith(".iso")) {
-			File avsFile = AviSynthFFmpeg.getAVSScript(filename, params.sid, params.fromFrame, params.toFrame, frameRateRatio, frameRateNumber);
+			File avsFile = AviSynthFFmpeg.getAVSScript(filename, params.getSid(), params.getFromFrame(), params.getToFrame(), frameRateRatio, frameRateNumber, configuration);
 			cmdList.add(ProcessUtil.getShortFileNameIfWideChars(avsFile.getAbsolutePath()));
 		} else {
-			cmdList.add(filename);
+			if (params.getStdIn() != null) {
+				cmdList.add("pipe:");
+			} else {
+				cmdList.add(filename);
+			}
+		}
+
+		/**
+		 * Defer to MEncoder for subtitles if:
+		 * - MEncoder is enabled and available
+		 * - The setting is enabled
+		 * - There are subtitles to transcode
+		 * - The file is not being played via the transcode folder
+		 */
+		if (
+			PlayerFactory.isPlayerActive(MEncoderVideo.ID) &&
+			!(renderer instanceof RendererConfiguration.OutputOverride) &&
+			params.getSid() != null &&
+			!dlna.isInsideTranscodeFolder() &&
+			configuration.isFFmpegDeferToMEncoderForProblematicSubtitles() &&
+			params.getSid().isEmbedded() &&
+			(
+				params.getSid().getType().isText() ||
+				params.getSid().getType() == SubtitleType.VOBSUB
+			)
+		) {
+			LOGGER.trace("Switching from FFmpeg to MEncoder to transcode subtitles because the user setting is enabled.");
+			MEncoderVideo mv = (MEncoderVideo) PlayerFactory.getPlayer(StandardPlayerId.MENCODER_VIDEO, false, true);
+			return mv.launchTranscode(dlna, media, params);
+		}
+
+		boolean deferToTsmuxer = true;
+		boolean canMuxVideoWithFFmpeg = true;
+		if (!(renderer instanceof RendererConfiguration.OutputOverride)) {
+			String prependTraceReason = "Not muxing the video stream with FFmpeg because ";
+			if (!params.getMediaRenderer().isVideoStreamTypeSupportedInTranscodingContainer(media)) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "the video codec is not the same as the transcoding goal.");
+			} else if (dlna.isInsideTranscodeFolder()) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "the file is being played via a FFmpeg entry in the TRANSCODE folder.");
+			} else if (params.getSid() != null) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "we need to burn subtitles.");
+			} else if (avisynth()) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "we are using AviSynth.");
+			} else if (media.isH264() && params.getMediaRenderer().isH264Level41Limited() && !media.isVideoWithinH264LevelLimits(newInput, params.getMediaRenderer())) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "the video stream is not within H.264 level limits for this renderer.");
+			} else if ("bt.601".equals(media.getMatrixCoefficients())) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "the colorspace probably isn't supported by the renderer.");
+			} else if ((params.getMediaRenderer().isKeepAspectRatio() || params.getMediaRenderer().isKeepAspectRatioTranscoding()) && !"16:9".equals(media.getAspectRatioContainer())) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "the renderer needs us to add borders so it displays the correct aspect ratio of " + media.getAspectRatioContainer() + ".");
+			} else if (!params.getMediaRenderer().isResolutionCompatibleWithRenderer(media.getWidth(), media.getHeight())) {
+				canMuxVideoWithFFmpeg = false;
+				LOGGER.trace(prependTraceReason + "the resolution is incompatible with the renderer.");
+			}
+		}
+
+		// Decide whether to defer to tsMuxeR or continue to use FFmpeg
+		if (!(renderer instanceof RendererConfiguration.OutputOverride) && configuration.isFFmpegMuxWithTsMuxerWhenCompatible()) {
+			// Decide whether to defer to tsMuxeR or continue to use FFmpeg
+			String prependTraceReason = "Not muxing the video stream with tsMuxeR via FFmpeg because ";
+			if (dlna.isInsideTranscodeFolder()) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the file is being played via a FFmpeg entry in the TRANSCODE folder.");
+			} else if (!params.getMediaRenderer().isMuxH264MpegTS()) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the renderer does not support H.264 inside MPEG-TS.");
+			} else if (params.getSid() != null) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "we need to burn subtitles.");
+			} else if (avisynth()) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "we are using AviSynth.");
+			} else if (media.isH264() && params.getMediaRenderer().isH264Level41Limited() && !media.isVideoWithinH264LevelLimits(newInput, params.getMediaRenderer())) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the video stream is not within H.264 level limits for this renderer.");
+			} else if (!media.isMuxable(params.getMediaRenderer())) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the video stream is not muxable to this renderer");
+			} else if (!aspectRatiosMatch) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "we need to transcode to apply the correct aspect ratio.");
+			} else if (!params.getMediaRenderer().isPS3() && media.isWebDl(filename, params)) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the version of tsMuxeR supported by this renderer does not support WEB-DL files.");
+			} else if ("bt.601".equals(media.getMatrixCoefficients())) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the colorspace probably isn't supported by the renderer.");
+			} else if ((params.getMediaRenderer().isKeepAspectRatio() || params.getMediaRenderer().isKeepAspectRatioTranscoding()) && !"16:9".equals(media.getAspectRatioContainer())) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the renderer needs us to add borders so it displays the correct aspect ratio of " + media.getAspectRatioContainer() + ".");
+			} else if (!params.getMediaRenderer().isResolutionCompatibleWithRenderer(media.getWidth(), media.getHeight())) {
+				deferToTsmuxer = false;
+				LOGGER.trace(prependTraceReason + "the resolution is incompatible with the renderer.");
+			} else if (!PlayerFactory.isPlayerAvailable(StandardPlayerId.TSMUXER_VIDEO)) {
+				deferToTsmuxer = false;
+				LOGGER.warn(prependTraceReason + "the configured executable isn't available.");
+			}
+			if (deferToTsmuxer) {
+				TsMuxeRVideo tv = (TsMuxeRVideo) PlayerFactory.getPlayer(StandardPlayerId.TSMUXER_VIDEO, false, true);
+				params.setForceFps(media.getValidFps(false));
+
+				if (media.getCodecV() != null) {
+					if (media.isH264()) {
+						params.setForceType("V_MPEG4/ISO/AVC");
+					} else if (media.getCodecV().startsWith("mpeg2")) {
+						params.setForceType("V_MPEG-2");
+					} else if (media.getCodecV().equals("vc1")) {
+						params.setForceType("V_MS/VFW/WVC1");
+					}
+				}
+
+				return tv.launchTranscode(dlna, media, params);
+			}
 		}
 
 		// Apply any video filters and associated options. These should go
 		// after video input is specified and before output streams are mapped.
-		cmdList.addAll(getVideoFilterOptions(dlna, media, params));
+		List<String> videoFilterOptions = getVideoFilterOptions(dlna, media, params);
+		if (videoFilterOptions.size() > 0) {
+			cmdList.addAll(getVideoFilterOptions(dlna, media, params));
+			canMuxVideoWithFFmpeg = false;
+		}
 
-		// Map the output streams if necessary
+		// Map the proper audio stream when there are multiple audio streams.
+		// For video the FFMpeg automatically chooses the stream with the highest resolution.
 		if (media.getAudioTracksList().size() > 1) {
-			// Set the video stream
+			/**
+			 * Use the first video stream that is not an attached picture, video
+			 * thumbnail or cover art.
+			 *
+			 * @see https://web.archive.org/web/20160609011350/https://ffmpeg.org/ffmpeg.html#Stream-specifiers-1
+			 * @todo find a way to automatically select proper stream when media
+			 *       includes multiple video streams
+			 */
 			cmdList.add("-map");
-			cmdList.add("0:v");
+			cmdList.add("0:V");
 
-			// Set the proper audio stream
 			cmdList.add("-map");
-			cmdList.add("0:a:" + (media.getAudioTracksList().indexOf(params.aid)));
+			cmdList.add("0:a:" + (media.getAudioTracksList().indexOf(params.getAid())));
 		}
 
 		// Now configure the output streams
@@ -790,77 +1098,145 @@ public class FFMpegVideo extends Player {
 			cmdList.add(String.valueOf(nThreads));
 		}
 
-		if (params.timeend > 0) {
+		if (params.getTimeEnd() > 0) {
 			cmdList.add("-t");
-			cmdList.add(String.valueOf(params.timeend));
-		}
-
-		cmdList.addAll(getVideoBitrateOptions(dlna, media, params));
-
-		// add audio bitrate options
-		// TODO: Integrate our (more comprehensive) code with this function
-		// from PMS to make keeping synchronised easier.
-		// Until then, leave the following line commented out.
-		// cmdList.addAll(getAudioBitrateOptions(dlna, media, params));
-
-		String customFFmpegOptions = renderer.getCustomFFmpegOptions();
-
-		// Audio bitrate
-		if (!ac3Remux && !dtsRemux && !(type() == Format.AUDIO)) {
-			int channels;
-			if (renderer.isTranscodeToWMV() && !renderer.isXBOX()) {
-				channels = 2;
-			} else if (ac3Remux) {
-				channels = params.aid.getAudioProperties().getNumberOfChannels(); // AC-3 remux
-			} else {
-				channels = configuration.getAudioChannelCount(); // 5.1 max for AC-3 encoding
-			}
-
-			if (!customFFmpegOptions.contains("-ac ")) {
-				cmdList.add("-ac");
-				cmdList.add(String.valueOf(channels));
-			}
-
-			if (!customFFmpegOptions.contains("-ab ")) {
-				cmdList.add("-ab");
-				cmdList.add(configuration.getAudioBitrate() + "k");
-			}
+			cmdList.add(String.valueOf(params.getTimeEnd()));
 		}
 
 		// Add the output options (-f, -c:a, -c:v, etc.)
-		cmdList.addAll(getVideoTranscodeOptions(dlna, media, params));
 
-		// Add custom options
-		if (StringUtils.isNotEmpty(customFFmpegOptions)) {
-			parseOptions(customFFmpegOptions, cmdList);
+		// Now that inputs and filtering are complete, see if we should
+		// give the renderer the final say on the command
+		boolean override = false;
+		if (renderer instanceof RendererConfiguration.OutputOverride) {
+			override = ((RendererConfiguration.OutputOverride) renderer).getOutputOptions(cmdList, dlna, this, params);
 		}
 
+		if (!override) {
+			cmdList.addAll(getVideoBitrateOptions(dlna, media, params));
+
+			String customFFmpegOptions = renderer.getCustomFFmpegOptions();
+
+			// Audio bitrate
+			if (!ac3Remux && !dtsRemux && !(type() == Format.AUDIO)) {
+				int channels = 0;
+				if (
+					(
+						renderer.isTranscodeToWMV() &&
+						!renderer.isXbox360()
+					) ||
+					(
+						renderer.isXboxOne() &&
+						purpose() == VIDEO_WEBSTREAM_PLAYER
+					)
+				) {
+					channels = 2;
+				} else if (params.getAid() != null && params.getAid().getAudioProperties().getNumberOfChannels() > configuration.getAudioChannelCount()) {
+					channels = configuration.getAudioChannelCount();
+				}
+
+				if (!customFFmpegOptions.contains("-ac ") && channels > 0) {
+					cmdList.add("-ac");
+					cmdList.add(String.valueOf(channels));
+				}
+
+				if (!customFFmpegOptions.matches(".* -(-ab|b:a) .*")) {
+					cmdList.add("-ab");
+					if (renderer.isTranscodeToAAC()) {
+						cmdList.add(Math.min(configuration.getAudioBitrate(), 320) + "k");
+					} else {
+						cmdList.add(String.valueOf(CodecUtil.getAC3Bitrate(configuration, params.getAid())) + "k");
+					}
+				}
+
+				if (
+					!customFFmpegOptions.contains("-ar ") &&
+					params.getAid() != null &&
+					params.getAid().getSampleRate() != params.getMediaRenderer().getTranscodedVideoAudioSampleRate()
+				) {
+					cmdList.add("-ar");
+					cmdList.add("" + params.getMediaRenderer().getTranscodedVideoAudioSampleRate());
+				}
+
+				// Use high quality resampler
+				// The parameters of http://forum.minimserver.com/showthread.php?tid=4181&pid=27185 are used.
+				if (
+					!customFFmpegOptions.contains("--resampler") &&
+					params.getAid() != null &&
+					params.getAid().getSampleRate() != params.getMediaRenderer().getTranscodedVideoAudioSampleRate() &&
+					configuration.isFFmpegSoX()
+				) {
+					cmdList.add("-resampler");
+					cmdList.add("soxr");
+					cmdList.add("-precision");
+					cmdList.add("33");
+					cmdList.add("-cheby");
+					cmdList.add("1");
+				}
+			}
+
+			// Add the output options (-f, -c:a, -c:v, etc.)
+			cmdList.addAll(getVideoTranscodeOptions(dlna, media, params, canMuxVideoWithFFmpeg));
+
+			// Add custom options
+			if (StringUtils.isNotEmpty(customFFmpegOptions)) {
+				parseOptions(customFFmpegOptions, cmdList);
+			}
+		}
+
+		// Set up the process
+		PipeProcess pipe = null;
+
 		if (!dtsRemux) {
-			cmdList.add("pipe:");
+			// cmdList.add("pipe:");
+
+			// basename of the named pipe:
+			String fifoName = String.format(
+				"ffmpegvideo_%d_%d",
+				Thread.currentThread().getId(),
+				System.currentTimeMillis()
+			);
+
+			// This process wraps the command that creates the named pipe
+			pipe = new PipeProcess(fifoName);
+			pipe.deleteLater(); // delete the named pipe later; harmless if it isn't created
+
+			params.getInputPipes()[0] = pipe;
+
+			// Output file
+			cmdList.add(pipe.getInputPipe());
 		}
 
 		String[] cmdArray = new String[cmdList.size()];
 		cmdList.toArray(cmdArray);
 
-		cmdArray = finalizeTranscoderArgs(
-			filename,
-			dlna,
-			media,
-			params,
-			cmdArray
-		);
-
 		ProcessWrapperImpl pw = new ProcessWrapperImpl(cmdArray, params);
 
 		setOutputParsing(dlna, pw, false);
 
-		if (dtsRemux) {
-			PipeProcess pipe;
+		if (!dtsRemux) {
+			ProcessWrapper mkfifoProcess = pipe.getPipeProcess();
+
+			/**
+			 * It can take a long time for Windows to create a named pipe (and
+			 * mkfifo can be slow if /tmp isn't memory-mapped), so run this in
+			 * the current thread.
+			 */
+			mkfifoProcess.runInSameThread();
+			pw.attachProcess(mkfifoProcess); // Clean up the mkfifo process when the transcode ends
+
+			// Give the mkfifo process a little time
+			try {
+				Thread.sleep(300);
+			} catch (InterruptedException e) {
+				LOGGER.error("Thread interrupted while waiting for named pipe to be created", e);
+			}
+		} else {
 			pipe = new PipeProcess(System.currentTimeMillis() + "tsmuxerout.ts");
 
-			TsMuxeRVideo ts = new TsMuxeRVideo();
-			File f = new File(configuration.getTempFolder(), "pms-tsmuxer.meta");
-			String cmd[] = new String[]{ ts.executable(), f.getAbsolutePath(), pipe.getInputPipe() };
+			TsMuxeRVideo ts = (TsMuxeRVideo) PlayerFactory.getPlayer(StandardPlayerId.TSMUXER_VIDEO, false, true);
+			File f = new File(configuration.getTempFolder(), "dms-tsmuxer.meta");
+			String[] cmd = new String[]{ts.getExecutable(), f.getAbsolutePath(), pipe.getInputPipe()};
 			pw = new ProcessWrapperImpl(cmd, params);
 
 			PipeIPCProcess ffVideoPipe = new PipeIPCProcess(System.currentTimeMillis() + "ffmpegvideo", System.currentTimeMillis() + "videoout", false, true);
@@ -868,25 +1244,17 @@ public class FFMpegVideo extends Player {
 			cmdList.add(ffVideoPipe.getInputPipe());
 
 			OutputParams ffparams = new OutputParams(configuration);
-			ffparams.maxBufferSize = 1;
-			ffparams.stdin = params.stdin;
+			ffparams.setMaxBufferSize(1);
+			ffparams.setStdIn(params.getStdIn());
 
 			String[] cmdArrayDts = new String[cmdList.size()];
 			cmdList.toArray(cmdArrayDts);
 
-			cmdArrayDts = finalizeTranscoderArgs(
-				filename,
-				dlna,
-				media,
-				params,
-				cmdArrayDts
-			);
-
 			ProcessWrapperImpl ffVideo = new ProcessWrapperImpl(cmdArrayDts, ffparams);
 
-			ProcessWrapper ff_video_pipe_process = ffVideoPipe.getPipeProcess();
-			pw.attachProcess(ff_video_pipe_process);
-			ff_video_pipe_process.runInNewThread();
+			ProcessWrapper ffVideoPipeProcess = ffVideoPipe.getPipeProcess();
+			pw.attachProcess(ffVideoPipeProcess);
+			ffVideoPipeProcess.runInNewThread();
 			ffVideoPipe.deleteLater();
 
 			pw.attachProcess(ffVideo);
@@ -901,24 +1269,24 @@ public class FFMpegVideo extends Player {
 			sm.setNbChannels(2);
 
 			List<String> cmdListDTS = new ArrayList<>();
-			cmdListDTS.add(executable());
+			cmdListDTS.add(getExecutable());
 			cmdListDTS.add("-y");
 			cmdListDTS.add("-ss");
 
-			if (params.timeseek > 0) {
-				cmdListDTS.add(String.valueOf(params.timeseek));
+			if (params.getTimeSeek() > 0) {
+				cmdListDTS.add(String.valueOf(params.getTimeSeek()));
 			} else {
 				cmdListDTS.add("0");
 			}
 
-			if (params.stdin == null) {
+			if (params.getStdIn() == null) {
 				cmdListDTS.add("-i");
 			} else {
 				cmdListDTS.add("-");
 			}
 			cmdListDTS.add(filename);
 
-			if (params.timeseek > 0) {
+			if (params.getTimeSeek() > 0) {
 				cmdListDTS.add("-copypriorss");
 				cmdListDTS.add("0");
 				cmdListDTS.add("-avoid_negative_ts");
@@ -939,37 +1307,37 @@ public class FFMpegVideo extends Player {
 			String[] cmdArrayDTS = new String[cmdListDTS.size()];
 			cmdListDTS.toArray(cmdArrayDTS);
 
-			if (!params.mediaRenderer.isMuxDTSToMpeg()) { // No need to use the PCM trick when media renderer supports DTS
+			if (!params.getMediaRenderer().isMuxDTSToMpeg()) { // No need to use the PCM trick when media renderer supports DTS
 				ffAudioPipe.setModifier(sm);
 			}
 
 			OutputParams ffaudioparams = new OutputParams(configuration);
-			ffaudioparams.maxBufferSize = 1;
-			ffaudioparams.stdin = params.stdin;
+			ffaudioparams.setMaxBufferSize(1);
+			ffaudioparams.setStdIn(params.getStdIn());
 			ProcessWrapperImpl ffAudio = new ProcessWrapperImpl(cmdArrayDTS, ffaudioparams);
 
-			params.stdin = null;
+			params.setStdIn(null);
 			try (PrintWriter pwMux = new PrintWriter(f)) {
 				pwMux.println("MUXOPT --no-pcr-on-video-pid --no-asyncio --new-audio-pes --vbr --vbv-len=500");
 				String videoType = "V_MPEG-2";
 
-				if (renderer.isTranscodeToH264TSAC3()) {
+				if (renderer.isTranscodeToH264()) {
 					videoType = "V_MPEG4/ISO/AVC";
 				}
 
-				if (params.no_videoencode && params.forceType != null) {
-					videoType = params.forceType;
+				if (params.isNoVideoEncode() && params.getForceType() != null) {
+					videoType = params.getForceType();
 				}
 
 				StringBuilder fps = new StringBuilder();
 				fps.append("");
-				if (params.forceFps != null) {
-					fps.append("fps=").append(params.forceFps).append(", ");
+				if (params.getForceFps() != null) {
+					fps.append("fps=").append(params.getForceFps()).append(", ");
 				}
 
 				String audioType = "A_AC3";
 				if (dtsRemux) {
-					if (params.mediaRenderer.isMuxDTSToMpeg()) {
+					if (params.getMediaRenderer().isMuxDTSToMpeg()) {
 						// Renderer can play proper DTS track
 						audioType = "A_DTS";
 					} else {
@@ -982,9 +1350,9 @@ public class FFMpegVideo extends Player {
 				pwMux.println(audioType + ", \"" + ffAudioPipe.getOutputPipe() + "\", track=2");
 			}
 
-			ProcessWrapper pipe_process = pipe.getPipeProcess();
-			pw.attachProcess(pipe_process);
-			pipe_process.runInNewThread();
+			ProcessWrapper pipeProcess = pipe.getPipeProcess();
+			pw.attachProcess(pipeProcess);
+			pipeProcess.runInNewThread();
 
 			try {
 				wait(50);
@@ -992,11 +1360,11 @@ public class FFMpegVideo extends Player {
 			}
 
 			pipe.deleteLater();
-			params.input_pipes[0] = pipe;
+			params.getInputPipes()[0] = pipe;
 
-			ProcessWrapper ff_pipe_process = ffAudioPipe.getPipeProcess();
-			pw.attachProcess(ff_pipe_process);
-			ff_pipe_process.runInNewThread();
+			ProcessWrapper ffPipeProcess = ffAudioPipe.getPipeProcess();
+			pw.attachProcess(ffPipeProcess);
+			ffPipeProcess.runInNewThread();
 
 			try {
 				wait(50);
@@ -1008,13 +1376,26 @@ public class FFMpegVideo extends Player {
 			ffAudio.runInNewThread();
 		}
 
+		// Launch the transcode command...
 		pw.runInNewThread();
+		// ...and wait briefly to allow it to start
+		try {
+			Thread.sleep(200);
+		} catch (InterruptedException e) {
+			LOGGER.error("Thread interrupted while waiting for transcode to start", e.getMessage());
+			LOGGER.trace("", e);
+		}
+		configuration = prev;
 		return pw;
 	}
 
 	private JCheckBox multithreading;
 	private JCheckBox videoRemuxTsMuxer;
 	private JCheckBox fc;
+	private JCheckBox deferToMEncoderForSubtitles;
+	private JCheckBox isFFmpegSoX;
+	private JComboBox<String> fFmpegGPUDecodingAccelerationMethod;
+	private JComboBox<String> fFmpegGPUDecodingAccelerationThreadNumber;
 
 	@Override
 	public JComponent config() {
@@ -1023,8 +1404,8 @@ public class FFMpegVideo extends Player {
 
 	protected JComponent config(String languageLabel) {
 		FormLayout layout = new FormLayout(
-			"left:pref, 0:grow",
-			"p, 3dlu, p, 3dlu, p, 3dlu, p"
+			"left:pref, 3dlu, pref",
+			"p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p, 3dlu, p"
 		);
 		PanelBuilder builder = new PanelBuilder(layout);
 		builder.border(Borders.EMPTY);
@@ -1032,7 +1413,7 @@ public class FFMpegVideo extends Player {
 
 		CellConstraints cc = new CellConstraints();
 
-		JComponent cmp = builder.addSeparator(Messages.getString(languageLabel), cc.xyw(2, 1, 1));
+		JComponent cmp = builder.addSeparator(Messages.getString(languageLabel), cc.xyw(1, 1, 1));
 		cmp = (JComponent) cmp.getComponent(0);
 		cmp.setFont(cmp.getFont().deriveFont(Font.BOLD));
 
@@ -1044,7 +1425,7 @@ public class FFMpegVideo extends Player {
 				configuration.setFfmpegMultithreading(e.getStateChange() == ItemEvent.SELECTED);
 			}
 		});
-		builder.add(multithreading, cc.xy(2, 3));
+		builder.add(GuiUtil.getPreferredSizeComponent(multithreading), cc.xy(1, 3));
 
 		videoRemuxTsMuxer = new JCheckBox(Messages.getString("MEncoderVideo.38"), configuration.isFFmpegMuxWithTsMuxerWhenCompatible());
 		videoRemuxTsMuxer.setContentAreaFilled(false);
@@ -1054,326 +1435,114 @@ public class FFMpegVideo extends Player {
 				configuration.setFFmpegMuxWithTsMuxerWhenCompatible(e.getStateChange() == ItemEvent.SELECTED);
 			}
 		});
-		builder.add(videoRemuxTsMuxer, cc.xy(2, 5));
+		builder.add(GuiUtil.getPreferredSizeComponent(videoRemuxTsMuxer), cc.xy(1, 5));
 
-		fc = new JCheckBox(Messages.getString("MEncoderVideo.21"), configuration.isFFmpegFontConfig());
+		fc = new JCheckBox(Messages.getString("FFmpeg.3"), configuration.isFFmpegFontConfig());
 		fc.setContentAreaFilled(false);
+		fc.setToolTipText(Messages.getString("FFmpeg.0"));
 		fc.addItemListener(new ItemListener() {
 			@Override
 			public void itemStateChanged(ItemEvent e) {
 				configuration.setFFmpegFontConfig(e.getStateChange() == ItemEvent.SELECTED);
 			}
 		});
-		builder.add(fc, cc.xy(2, 7));
+		builder.add(GuiUtil.getPreferredSizeComponent(fc), cc.xy(1, 7));
+
+		deferToMEncoderForSubtitles = new JCheckBox(Messages.getString("FFmpeg.1"), configuration.isFFmpegDeferToMEncoderForProblematicSubtitles());
+		deferToMEncoderForSubtitles.setContentAreaFilled(false);
+		deferToMEncoderForSubtitles.setToolTipText(Messages.getString("FFmpeg.2"));
+		deferToMEncoderForSubtitles.addItemListener(new ItemListener() {
+			@Override
+			public void itemStateChanged(ItemEvent e) {
+				configuration.setFFmpegDeferToMEncoderForProblematicSubtitles(e.getStateChange() == ItemEvent.SELECTED);
+			}
+		});
+		builder.add(GuiUtil.getPreferredSizeComponent(deferToMEncoderForSubtitles), cc.xy(1, 9));
+
+		isFFmpegSoX = new JCheckBox(Messages.getString("FFmpeg.Sox"), configuration.isFFmpegSoX());
+		isFFmpegSoX.setContentAreaFilled(false);
+		isFFmpegSoX.setToolTipText(Messages.getString("FFmpeg.SoxTooltip"));
+		isFFmpegSoX.addItemListener(new ItemListener() {
+			@Override
+			public void itemStateChanged(ItemEvent e) {
+				configuration.setFFmpegSoX(e.getStateChange() == ItemEvent.SELECTED);
+			}
+		});
+		builder.add(GuiUtil.getPreferredSizeComponent(isFFmpegSoX), cc.xy(1, 11));
+
+		builder.add(new JLabel(Messages.getString("FFmpeg.GPUDecodingAccelerationMethod")), cc.xy(1, 13));
+
+		String[] keys = configuration.getFFmpegAvailableGPUDecodingAccelerationMethods();
+
+		fFmpegGPUDecodingAccelerationMethod = new JComboBox<>(keys);
+		fFmpegGPUDecodingAccelerationMethod.setSelectedItem(configuration.getFFmpegGPUDecodingAccelerationMethod());
+		fFmpegGPUDecodingAccelerationMethod.setToolTipText(Messages.getString("FFmpeg.GPUDecodingAccelerationMethodTooltip"));
+		fFmpegGPUDecodingAccelerationMethod.addItemListener(new ItemListener() {
+			@Override
+			public void itemStateChanged(ItemEvent e) {
+				if (e.getStateChange() == ItemEvent.SELECTED) {
+					configuration.setFFmpegGPUDecodingAccelerationMethod((String) e.getItem());
+				}
+			}
+		});
+		fFmpegGPUDecodingAccelerationMethod.setEditable(true);
+		builder.add(GuiUtil.getPreferredSizeComponent(fFmpegGPUDecodingAccelerationMethod), cc.xy(3, 13));
+
+		builder.addLabel(Messages.getString("FFmpeg.GPUDecodingThreadCount"), cc.xy(1, 15));
+		String[] threads = new String[] {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"};
+
+		fFmpegGPUDecodingAccelerationThreadNumber = new JComboBox<>(threads);
+		fFmpegGPUDecodingAccelerationThreadNumber.setSelectedItem(configuration.getFFmpegGPUDecodingAccelerationThreadNumber());
+		fFmpegGPUDecodingAccelerationThreadNumber.setToolTipText(Messages.getString("FFmpeg.GPUDecodingThreadCountTooltip"));
+
+		fFmpegGPUDecodingAccelerationThreadNumber.addItemListener(new ItemListener() {
+			@Override
+			public void itemStateChanged(ItemEvent e) {
+				configuration.setFFmpegGPUDecodingAccelerationThreadNumber((String) e.getItem());
+			}
+		});
+		fFmpegGPUDecodingAccelerationThreadNumber.setEditable(true);
+		builder.add(GuiUtil.getPreferredSizeComponent(fFmpegGPUDecodingAccelerationThreadNumber), cc.xy(3, 15));
 
 		return builder.getPanel();
 	}
 
+	/**
+	 * A simple arg parser with basic quote comprehension
+	 */
 	protected static List<String> parseOptions(String str) {
 		return str == null ? null : parseOptions(str, new ArrayList<String>());
 	}
 
 	protected static List<String> parseOptions(String str, List<String> cmdList) {
-		while (str.length() > 0) {
-			if (str.charAt(0) == '\"') {
-				int pos = str.indexOf('"', 1);
-				if (pos == -1) {
-					// No ", error
-					break;
-				}
-				String tmp = str.substring(1, pos);
-				cmdList.add(tmp.trim());
-				str = str.substring(pos + 1);
+		int start, pos = 0, len = str.length();
+		while (pos < len) {
+			// New arg
+			if (str.charAt(pos) == '\"') {
+				start = pos + 1;
+				// Find next quote. No support for escaped quotes here, and
+				// -1 means no matching quote but be lax and accept the fragment anyway
+				pos = str.indexOf('"', start);
 			} else {
-				// New arg, find space
-				int pos = str.indexOf(' ');
-				if (pos == -1) {
-					// No space, we're done
-					cmdList.add(str);
-					break;
-				}
-				String tmp = str.substring(0, pos);
-				cmdList.add(tmp.trim());
-				str = str.substring(pos + 1);
+				start = pos;
+				// Find next space
+				pos = str.indexOf(' ', start);
+			}
+			if (pos == -1) {
+				// We're done
+				pos = len;
+			}
+			// Add the arg, if any
+			if (pos - start > 0) {
+				cmdList.add(str.substring(start, pos).trim());
+			}
+			pos++;
+			// Advance to next non-space char
+			while (pos < len && str.charAt(pos) == ' ') {
+				pos++;
 			}
 		}
 		return cmdList;
-	}
-
-	/**
-	 * Extracts embedded subtitles from video to file in SSA/ASS format, converts external SRT
-	 * subtitles file to SSA/ASS format and applies fontconfig setting to that converted file
-	 * and applies timeseeking when required.
-	 *
-	 * @param dlna DLNAResource
-	 * @param media DLNAMediaInfo
-	 * @param params Output parameters
-	 * @return Converted subtitle file
-	 * @throws IOException
-	 */
-	public File getSubtitles(DLNAResource dlna, DLNAMediaInfo media, OutputParams params) throws IOException {
-		if (media == null || params.sid.getId() == -1 || !params.sid.getType().isText()) {
-			return null;
-		}
-
-		String dir = configuration.getDataFile(SUB_DIR);
-		File subsPath = new File(dir);
-		if (!subsPath.exists()) {
-			subsPath.mkdirs();
-		}
-
-		boolean applyFontConfig = configuration.isFFmpegFontConfig();
-		boolean isEmbeddedSource = params.sid.getId() < 100;
-
-		String filename = isEmbeddedSource ?
-			dlna.getSystemName() : params.sid.getExternalFile().getAbsolutePath();
-
-		String basename;
-
-		long modId = new File(filename).lastModified();
-		if (modId != 0) {
-			// We have a real file
-			basename = FilenameUtils.getBaseName(filename);
-		} else {
-			// It's something else, e.g. a url or psuedo-url without meaningful
-			// lastmodified and (maybe) basename characteristics.
-			basename = dlna.getName().replaceAll("[<>:\"\\\\/|?*+\\[\\]\n\r ']", "").trim();
-			modId = filename.hashCode();
-		}
-
-		File convertedSubs;
-		if (applyFontConfig || isEmbeddedSource) {
-			convertedSubs = new File(subsPath.getAbsolutePath() + File.separator + basename + "_ID" + params.sid.getId() + "_" + modId + ".ass");
-		} else {
-			String tmp = params.sid.getExternalFile().getName().replaceAll("[<>:\"\\\\/|?*+\\[\\]\n\r ']", "").trim();
-			convertedSubs = new File(subsPath.getAbsolutePath() + File.separator + modId + "_" + tmp);
-		}
-
-		if (convertedSubs.canRead()) {
-			// subs are already converted
-			if (applyFontConfig || isEmbeddedSource) {
-				params.sid.setType(SubtitleType.ASS);
-			}
-
-			return convertedSubs;
-		}
-
-		boolean isExternalAss = false;
-		if (
-			params.sid.getType() == SubtitleType.ASS &&
-			params.sid.isExternal() &&
-			!isEmbeddedSource
-		) {
-			isExternalAss = true;
-		}
-
-		File tempSubs;
-		if (
-			isExternalAss ||
-			(
-				!applyFontConfig &&
-				!isEmbeddedSource &&
-				params.sid.getType() == SubtitleType.SUBRIP
-			)
-		) {
-			tempSubs = params.sid.getExternalFile();
-		} else {
-			tempSubs = convertSubsToAss(filename, media, params);
-		}
-
-		if (tempSubs == null) {
-			return null;
-		}
-
-		if (!FileUtil.isFileUTF8(tempSubs)) {
-			tempSubs = SubtitleUtils.applyCodepageConversion(tempSubs, convertedSubs);
-		} else {
-			FileUtils.copyFile(tempSubs, convertedSubs);
-			tempSubs = convertedSubs;
-		}
-
-		// Now we're sure we actually have our own modifiable file
-		if (applyFontConfig) {
-			try {
-				tempSubs = applyFontconfigToASSTempSubsFile(tempSubs, media);
-			} catch (IOException e) {
-				LOGGER.debug("Applying subs setting ends with error: " + e);
-				return null;
-			}
-		}
-
-		if (isEmbeddedSource) {
-			params.sid.setExternalFile(tempSubs);
-			params.sid.setType(SubtitleType.ASS);
-		}
-
-		PMS.get().addTempFile(tempSubs, 30 * 24 * 3600 * 1000);
-
-		return tempSubs;
-	}
-
-	/**
-	 * Converts external subtitles file in SRT format or extract embedded subs to default SSA/ASS format
-	 *
-	 * @param fileName Subtitles file in SRT format or video file with embedded subs
-	 * @param media
-	 * @param params output parameters
-	 * @return Converted subtitles file in SSA/ASS format
-	 */
-	public static File convertSubsToAss(String fileName, DLNAMediaInfo media, OutputParams params) {
-		if (!params.sid.getType().isText()) {
-			return null;
-		}
-		List<String> cmdList = new ArrayList<>();
-		File tempSubsFile;
-		cmdList.add(configuration.getFfmpegPath());
-		cmdList.add("-y");
-		cmdList.add("-loglevel");
-		if (LOGGER.isTraceEnabled()) { // Set -loglevel in accordance with LOGGER setting
-			cmdList.add("info"); // Could be changed to "verbose" or "debug" if "info" level is not enough
-		} else {
-			cmdList.add("fatal");
-		}
-
-		// Try to specify input encoding if we have a non utf-8 external sub
-		if (params.sid.getId() >= 100 && !params.sid.isExternalFileUtf8()) {
-			String encoding = isNotBlank(configuration.getSubtitlesCodepage()) ?
-					// Prefer the global user-specified encoding if we have one.
-					// Note: likely wrong if the file isn't supplied by the user.
-					configuration.getSubtitlesCodepage() :
-				params.sid.getExternalFileCharacterSet() != null ?
-					// Fall back on the actually detected encoding if we have it.
-					// Note: accuracy isn't 100% guaranteed.
-					params.sid.getExternalFileCharacterSet() :
-				null; // Otherwise we're out of luck!
-			if (encoding != null) {
-				cmdList.add("-sub_charenc");
-				cmdList.add(encoding);
-			}
-		}
-
-		cmdList.add("-i");
-		cmdList.add(fileName);
-
-		if (params.sid.isEmbedded()) {
-			cmdList.add("-map");
-			cmdList.add("0:s:" + (media.getSubtitleTracksList().indexOf(params.sid)));
-		}
-
-		try {
-			tempSubsFile = new File(configuration.getTempFolder(), FilenameUtils.getBaseName(fileName) + ".ass");
-		} catch (IOException e1) {
-			LOGGER.debug("Subtitles conversion finished wih error: " + e1);
-			return null;
-		}
-		cmdList.add(tempSubsFile.getAbsolutePath());
-
-		String[] cmdArray = new String[cmdList.size()];
-		cmdList.toArray(cmdArray);
-
-		ProcessWrapperImpl pw = new ProcessWrapperImpl(cmdArray, params);
-		pw.runInNewThread();
-
-		try {
-			pw.join(); // Wait until the conversion is finished
-			pw.stopProcess(); // Avoid creating a pipe for this process and messing up with buffer progress bar
-		} catch (InterruptedException e) {
-			LOGGER.debug("Subtitles conversion finished wih error: " + e);
-			return null;
-		}
-
-		tempSubsFile.deleteOnExit();
-		return tempSubsFile;
-	}
-
-	public File applyFontconfigToASSTempSubsFile(File tempSubs, DLNAMediaInfo media) throws IOException {
-		File outputSubs = tempSubs;
-		StringBuilder outputString = new StringBuilder();
-		File temp = new File(configuration.getTempFolder(), tempSubs.getName() + ".tmp");
-		FileUtils.copyFile(tempSubs, temp);
-		BufferedWriter output;
-		try (BufferedReader input = new BufferedReader(new FileReader(temp))) {
-			output = new BufferedWriter(new FileWriter(outputSubs));
-			String line;
-			String[] format = null;
-			int i;
-			while ((line = input.readLine()) != null) {
-				outputString.setLength(0);
-				if (line.startsWith("[Script Info]")) {
-					outputString.append(line).append("\n");
-					output.write(outputString.toString());
-					while ((line = input.readLine()) != null) {
-						outputString.setLength(0);
-						if (!line.isEmpty()) {
-							outputString.append(line).append("\n");
-							output.write(outputString.toString());
-						} else {
-							outputString.append("PlayResY: ").append(media.getHeight()).append("\n");
-							outputString.append("PlayResX: ").append(media.getWidth()).append("\n");
-							break;
-						}
-					}
-				}
-
-				if (line != null && line.startsWith("Format:")) {
-					format = line.split(",");
-					outputString.append(line).append("\n");
-					output.write(outputString.toString());
-					continue;
-				}
-
-				if (line != null && line.startsWith("Style: Default")) {
-					String[] params = line.split(",");
-
-					for (i = 0; i < format.length; i++) {
-						if (format[i].contains("Fontname")) {
-							if (!configuration.getFont().isEmpty()) {
-								params[i] = configuration.getFont();
-							} else {
-								params[i] = "Arial";
-							}
-							continue;
-						}
-
-						if (format[i].contains("Fontsize")) {
-							params[i] = Integer.toString((int) ((Integer.parseInt(params[i]) * media.getHeight() / (double) 288 * Double.parseDouble(configuration.getAssScale()))));
-							continue;
-						}
-
-						if (format[i].contains("PrimaryColour")) {
-							String primaryColour = Integer.toHexString(configuration.getSubsColor());
-							params[i] = "&H" + primaryColour.substring(6, 8) + primaryColour.substring(4, 6) + primaryColour.substring(2, 4);
-							continue;
-						}
-
-						if (format[i].contains("Outline")) {
-							params[i] = configuration.getAssOutline();
-							continue;
-						}
-
-						if (format[i].contains("Shadow")) {
-							params[i] = configuration.getAssShadow();
-							continue;
-						}
-
-						if (format[i].contains("MarginV")) {
-							params[i] = configuration.getAssMargin();
-						}
-					}
-
-					outputString.append(StringUtils.join(params, ",")).append("\n");
-					output.write(outputString.toString());
-					continue;
-				}
-
-				outputString.append(line).append("\n");
-				output.write(outputString.toString());
-			}
-		}
-		output.flush();
-		output.close();
-		temp.deleteOnExit();
-		return outputSubs;
 	}
 
 	/**
@@ -1387,19 +1556,16 @@ public class FFMpegVideo extends Player {
 	 * @return
 	 */
 	public boolean isDisableSubtitles(OutputParams params) {
-		return configuration.isDisableSubtitles() || (params.sid == null) || avisynth();
+		return configuration.isDisableSubtitles() || (params.getSid() == null) || avisynth();
 	}
 
-	/**
-	 * {@inheritDoc}
-	 *
-	 * @return
-	 */
 	@Override
 	public boolean isCompatible(DLNAResource resource) {
 		if (
 			PlayerUtil.isVideo(resource, Format.Identifier.MKV) ||
-			PlayerUtil.isVideo(resource, Format.Identifier.MPG)
+			PlayerUtil.isVideo(resource, Format.Identifier.MPG) ||
+			PlayerUtil.isVideo(resource, Format.Identifier.OGG) ||
+			"m3u8".equals(resource.getFormat().getMatchedExtension())
 		) {
 			return true;
 		}
@@ -1408,7 +1574,7 @@ public class FFMpegVideo extends Player {
 	}
 
 	// matches 'Duration: 00:17:17.00' but not 'Duration: N/A'
-	static final Matcher reDuration = Pattern.compile("Duration:\\s+([\\d:.]+),").matcher("");
+	static final Matcher RE_DURATION = Pattern.compile("Duration:\\s+([\\d:.]+),").matcher("");
 
 	/**
 	 * Set up a filter to parse ffmpeg's stderr output for info
@@ -1418,13 +1584,13 @@ public class FFMpegVideo extends Player {
 		if (configuration.isResumeEnabled() && dlna.getMedia() != null) {
 			long duration = force ? 0 : (long) dlna.getMedia().getDurationInSeconds();
 			if (duration == 0 || duration == DLNAMediaInfo.TRANS_SIZE) {
-				OutputTextLogger ffParser = new OutputTextLogger(null, pw) {
+				OutputTextLogger ffParser = new OutputTextLogger(null) {
 					@Override
 					public boolean filter(String line) {
-						if (reDuration.reset(line).find()) {
-							String d = reDuration.group(1);
+						if (RE_DURATION.reset(line).find()) {
+							String d = RE_DURATION.group(1);
 							LOGGER.trace("[{}] setting duration: {}", ID, d);
-							dlna.getMedia().setDuration(convertStringToTime(d));
+							dlna.getMedia().setDuration(StringUtil.convertStringToTime(d));
 							return false; // done, stop filtering
 						}
 						return true; // keep filtering
@@ -1434,5 +1600,96 @@ public class FFMpegVideo extends Player {
 				pw.setStderrConsumer(ffParser);
 			}
 		}
+	}
+
+	@Override
+	public boolean excludeFormat(Format extension) {
+		return false;
+	}
+
+	@Override
+	public boolean isPlayerCompatible(RendererConfiguration renderer) {
+		return true;
+	}
+
+	@Override
+	@Nullable
+	public ExecutableInfo testExecutable(@Nonnull ExecutableInfo executableInfo) {
+		executableInfo = testExecutableFile(executableInfo);
+		if (Boolean.FALSE.equals(executableInfo.getAvailable())) {
+			return executableInfo;
+		}
+		final String arg = "-version";
+		ExecutableInfoBuilder result = executableInfo.modify();
+		try {
+			ListProcessWrapperResult output = SimpleProcessWrapper.runProcessListOutput(
+				30000,
+				1000,
+				executableInfo.getPath().toString(),
+				arg
+			);
+			if (output.getError() != null) {
+				result.errorType(ExecutableErrorType.GENERAL);
+				result.errorText(String.format(Messages.getString("Engine.Error"), this) + " \n" + output.getError().getMessage());
+				result.available(Boolean.FALSE);
+				LOGGER.debug("\"{} {}\" failed with error: {}", executableInfo.getPath(), arg, output.getError().getMessage());
+				return result.build();
+			}
+			if (output.getExitCode() == 0) {
+				if (output.getOutput() != null && output.getOutput().size() > 0) {
+					Pattern pattern = Pattern.compile("^ffmpeg version\\s+(.*?)\\s+Copyright", Pattern.CASE_INSENSITIVE);
+					Matcher matcher = pattern.matcher(output.getOutput().get(0));
+					if (matcher.find() && isNotBlank(matcher.group(1))) {
+						result.version(new Version(matcher.group(1)));
+					}
+				}
+				result.available(Boolean.TRUE);
+
+				if (result instanceof FFmpegExecutableInfoBuilder) {
+					List<String> protocols = FFmpegOptions.getSupportedProtocols(executableInfo.getPath());
+					((FFmpegExecutableInfoBuilder) result).protocols(protocols);
+					if (protocols.size() == 0) {
+						LOGGER.warn("Couldn't parse any supported protocols for \"{}\"", executableInfo.getPath());
+					} else {
+						LOGGER.debug("{} supported protocols: {}", executableInfo.getPath(), protocols);
+					}
+				} else {
+					LOGGER.error("Could not store FFmpeg supported protocols because of an internal error");
+				}
+			} else {
+				NTStatus ntStatus = Platform.isWindows() ? NTStatus.typeOf(output.getExitCode()) : null;
+				if (ntStatus != null) {
+					result.errorType(ExecutableErrorType.GENERAL);
+					result.errorText(String.format(Messages.getString("Engine.Error"), this) + "\n\n" + ntStatus);
+				} else {
+					if (output.getOutput().size() > 2) {
+						result.errorType(ExecutableErrorType.GENERAL);
+						result.errorText(
+							String.format(Messages.getString("Engine.Error"), this) + " \n" +
+							output.getOutput().get(output.getOutput().size() - 2) + " " +
+							output.getOutput().get(output.getOutput().size() - 1)
+						);
+					} else if (output.getOutput().size() > 1) {
+						result.errorType(ExecutableErrorType.GENERAL);
+						result.errorText(
+							String.format(Messages.getString("Engine.Error"), this) + " \n" +
+							output.getOutput().get(output.getOutput().size() - 1)
+						);
+					} else {
+						result.errorType(ExecutableErrorType.GENERAL);
+						result.errorText(String.format(Messages.getString("Engine.Error"), this) + Messages.getString("General.3"));
+					}
+				}
+				result.available(Boolean.FALSE);
+			}
+		} catch (InterruptedException e) {
+			return null;
+		}
+		return result.build();
+	}
+
+	@Override
+	protected boolean isSpecificTest() {
+		return false;
 	}
 }

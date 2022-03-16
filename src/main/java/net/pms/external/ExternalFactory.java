@@ -22,9 +22,11 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.FileInputStream;
-import java.io.FileWriter;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -32,7 +34,10 @@ import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.security.AccessController;
 import java.util.ArrayList;
+import java.security.PrivilegedAction;
 import java.util.Enumeration;
 import java.util.List;
 import javax.swing.JLabel;
@@ -40,13 +45,13 @@ import net.pms.Messages;
 import net.pms.PMS;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
-import net.pms.dlna.RootFolder;
 import net.pms.external.URLResolver.URLResult;
-import net.pms.newgui.LooksFrame;
+import net.pms.util.FilePermissions;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 /**
  * This class takes care of registering plugins. Plugin jars are loaded,
@@ -57,7 +62,7 @@ public class ExternalFactory {
 	 * For logging messages.
 	 */
 	private static final Logger LOGGER = LoggerFactory.getLogger(ExternalFactory.class);
-	private static final PmsConfiguration configuration = PMS.getConfiguration();
+	private static final PmsConfiguration CONFIGURATION = PMS.getConfiguration();
 
 	/**
 	 * List of external listener class instances.
@@ -106,7 +111,7 @@ public class ExternalFactory {
 	}
 
 	/**
-	 * Stores the class of an external listener in a list for later retrieval. 
+	 * Stores the class of an external listener in a list for later retrieval.
 	 * The same class will only be stored once.
 	 *
 	 * @param clazz The class to store.
@@ -119,10 +124,8 @@ public class ExternalFactory {
 
 	private static String getMainClass(URL jar) {
 		URL[] jarURLs1 = {jar};
-		URLClassLoader classLoader = new URLClassLoader(jarURLs1);
-		Enumeration<URL> resources;
-
-		try {
+		try (URLClassLoader classLoader = new URLClassLoader(jarURLs1)) {
+			Enumeration<URL> resources;
 			// Each plugin .jar file has to contain a resource named "plugin"
 			// which should contain the name of the main plugin class.
 			resources = classLoader.getResources("plugin");
@@ -133,15 +136,16 @@ public class ExternalFactory {
 
 				// Determine the plugin main class name from the contents of
 				// the plugin file.
-				try (InputStreamReader in = new InputStreamReader(url.openStream())) {
+				try (InputStreamReader in = new InputStreamReader(url.openStream(), StandardCharsets.UTF_8)) {
 					name = new char[512];
-					in.read(name);
+					if (in.read(name) > 0) {
+						return new String(name).trim();
+					}
 				}
-
-				return new String(name).trim();
 			}
 		} catch (IOException e) {
-			LOGGER.error("Can't load plugin resources", e);
+			LOGGER.error("Can't load plugin resources: {}", e.getMessage());
+			LOGGER.trace("", e);
 		}
 
 		return null;
@@ -175,10 +179,23 @@ public class ExternalFactory {
 	 * This method loads the jar files found in the plugin dir
 	 * or if installed from the web.
 	 */
-	public static void loadJAR(URL[] jarURL, boolean download, URL newURL) {
-		// Create a classloader to take care of loading the plugin classes from
-		// their URL.
-		URLClassLoader classLoader = new URLClassLoader(jarURL);
+	public static void loadJAR(final URL[] jarURL, boolean download, URL newURL) {
+		/* Create a classloader to take care of loading the plugin classes from
+		 * their URL.
+		 *
+		 * A note on the suppressed warning: The classloader need to remain open as long
+		 * as the loaded classes are in use - in our case forever.
+		 * @see http://stackoverflow.com/questions/13944868/leaving-classloader-open-after-first-use
+		 */
+		@SuppressWarnings("resource")
+		URLClassLoader classLoader = AccessController.doPrivileged(new PrivilegedAction<URLClassLoader>() {
+
+			@Override
+			public URLClassLoader run() {
+				return new URLClassLoader(jarURL);
+			}
+
+		});
 		Enumeration<URL> resources;
 
 		try {
@@ -186,7 +203,13 @@ public class ExternalFactory {
 			// which should contain the name of the main plugin class.
 			resources = classLoader.getResources("plugin");
 		} catch (IOException e) {
-			LOGGER.error("Can't load plugin resources", e);
+			LOGGER.error("Can't load plugin resources: {}", e.getMessage());
+			LOGGER.trace("", e);
+			try {
+				classLoader.close();
+			} catch (IOException e2) {
+				// Just swallow
+			}
 			return;
 		}
 
@@ -197,9 +220,11 @@ public class ExternalFactory {
 				// Determine the plugin main class name from the contents of
 				// the plugin file.
 				char[] name;
-				try (InputStreamReader in = new InputStreamReader(url.openStream())) {
+				try (InputStreamReader in = new InputStreamReader(url.openStream(), StandardCharsets.UTF_8)) {
 					name = new char[512];
-					in.read(name);
+					if (in.read(name) < 1) {
+						continue;
+					}
 				}
 				String pluginMainClassName = new String(name).trim();
 
@@ -223,6 +248,7 @@ public class ExternalFactory {
 		}
 	}
 
+	@SuppressFBWarnings("DM_GC")
 	private static void purgeCode(String mainClass, URL newUrl) {
 		Class<?> clazz1 = null;
 
@@ -239,25 +265,18 @@ public class ExternalFactory {
 
 		externalListenerClasses.remove(clazz1);
 		ExternalListener remove = null;
-		for (ExternalListener list : externalListeners ) {
+		for (ExternalListener list : externalListeners) {
 			if (list.getClass().equals(clazz1)) {
 				remove = list;
 				break;
 			}
 		}
 
-		ArrayList<RendererConfiguration> renders = RendererConfiguration.getEnabledRenderersConfigurations();
-
-		for (RendererConfiguration r : renders) {
-			RootFolder rf = r.getRootFolder();
-			rf.reset();
-		}
+		RendererConfiguration.resetAllRenderers();
 
 		if (remove != null) {
 			externalListeners.remove(remove);
 			remove.shutdown();
-			LooksFrame frame = (LooksFrame) PMS.get().getFrame();
-			frame.getPt().removePlugin(remove);
 		}
 
 		for (int i = 0; i < 3; i++) {
@@ -276,7 +295,7 @@ public class ExternalFactory {
 			File f = url2file(url);
 			File f1 = url2file(newUrl);
 
-			if (f1 == null || f ==null) {
+			if (f1 == null || f == null) {
 				continue;
 			}
 
@@ -291,7 +310,7 @@ public class ExternalFactory {
 
 		try {
 			f = new File(url.toURI());
-		} catch(URISyntaxException e) {
+		} catch (URISyntaxException e) {
 			f = new File(url.getPath());
 		}
 
@@ -299,44 +318,50 @@ public class ExternalFactory {
 	}
 
 	private static void addToPurgeFile(File f) {
-		try {
-			try (FileWriter out = new FileWriter("purge", true)) {
-				out.write(f.getAbsolutePath() + "\r\n");
-				out.flush();
-			}
-		} catch (Exception e) {
-			LOGGER.debug("purge file error " + e);
+		try (OutputStreamWriter out = new OutputStreamWriter(new FileOutputStream("purge", true), StandardCharsets.UTF_8)) {
+			out.write(f.getAbsolutePath() + "\r\n");
+			out.flush();
+		} catch (IOException e) {
+			LOGGER.debug("Purge file error: {}" + e.getMessage());
+			LOGGER.trace("", e);
 		}
 	}
 
 	private static void purgeFiles() {
 		File purge = new File("purge");
-		String action = configuration.getPluginPurgeAction();
+		String action = CONFIGURATION.getPluginPurgeAction();
 
 		if (action.equalsIgnoreCase("none")) {
-			purge.delete();
+			if (!purge.delete()) {
+				LOGGER.error("Could not delete purgefile: \"{}\"", purge.getAbsolutePath());
+			}
 			return;
 		}
 
-		try {
-			try (FileInputStream fis = new FileInputStream(purge)) {
-				BufferedReader in = new BufferedReader(new InputStreamReader(fis)); 
-				String line;
+		try (FileInputStream fis = new FileInputStream(purge); BufferedReader in = new BufferedReader(new InputStreamReader(fis, StandardCharsets.UTF_8))) {
+			String line;
 
-				while ((line = in.readLine()) != null) {
-					File f = new File(line);
+			while ((line = in.readLine()) != null) {
+				File f = new File(line);
 
-					if (action.equalsIgnoreCase("delete")) {
-						f.delete();
-					} else if(action.equalsIgnoreCase("backup")) {
-						FileUtils.moveFileToDirectory(f, new File("backup"), true);
-						f.delete();
+				if (action.equalsIgnoreCase("delete")) {
+					if (!f.delete()) {
+						LOGGER.error("Could not delete file: \"{}\"", f.getAbsolutePath());
+					}
+				} else if (action.equalsIgnoreCase("backup")) {
+					FileUtils.moveFileToDirectory(f, new File("backup"), true);
+					if (!f.delete()) {
+						LOGGER.error("Could not delete file: \"{}\"", f.getAbsolutePath());
 					}
 				}
-				in.close();
 			}
-		} catch (IOException e) { }
-		purge.delete();
+		} catch (IOException e) {
+			LOGGER.error("Error while deleting plugins: {}", e.getMessage());
+			LOGGER.trace("", e);
+		}
+		if (!purge.delete()) {
+			LOGGER.error("Could not delete purgefile: \"{}\"", purge.getAbsolutePath());
+		}
 	}
 
 	/**
@@ -346,29 +371,30 @@ public class ExternalFactory {
 	 * class. This main plugin class is then loaded and an instance is created
 	 * and registered for later use.
 	 */
+	@SuppressWarnings("null")
 	public static void lookup() {
 		// Start by purging files
 		purgeFiles();
-		File pluginDirectory = new File(configuration.getPluginDirectory());
-		LOGGER.info("Searching for plugins in " + pluginDirectory.getAbsolutePath());
+		File pluginsFolder = new File(CONFIGURATION.getPluginDirectory());
+		LOGGER.info("Searching for plugins in " + pluginsFolder.getAbsolutePath());
 
-		if (!pluginDirectory.exists()) {
-			LOGGER.warn("Plugin directory doesn't exist: " + pluginDirectory);
-			return;
-		}
-
-		if (!pluginDirectory.isDirectory()) {
-			LOGGER.warn("Plugin directory is not a directory: " + pluginDirectory);
-			return;
-		}
-
-		if (!pluginDirectory.canRead()) {
-			LOGGER.warn("Plugin directory is not readable: " + pluginDirectory);
+		try {
+			FilePermissions permissions = new FilePermissions(pluginsFolder);
+			if (!permissions.isFolder()) {
+				LOGGER.warn("Plugins folder is not a folder: " + pluginsFolder.getAbsolutePath());
+				return;
+			}
+			if (!permissions.isBrowsable()) {
+				LOGGER.warn("Plugins folder is not readable: " + pluginsFolder.getAbsolutePath());
+				return;
+			}
+		} catch (FileNotFoundException e) {
+			LOGGER.warn("Can't find plugins folder: {}", e.getMessage());
 			return;
 		}
 
 		// Find all .jar files in the plugin directory
-		File[] jarFiles = pluginDirectory.listFiles(
+		File[] jarFiles = pluginsFolder.listFiles(
 			new FileFilter() {
 				@Override
 				public boolean accept(File file) {
@@ -419,14 +445,12 @@ public class ExternalFactory {
 		for (Class<?> clazz: externalListenerClasses) {
 			// Skip the classes that should not be instantiated at this
 			// time but rather at a later time.
-			if (!AdditionalFolderAtRoot.class.isAssignableFrom(clazz) && !AdditionalFoldersAtRoot.class.isAssignableFrom(clazz)) {
-				try {
-					// Create a new instance of the plugin class and store it
-					ExternalListener instance = (ExternalListener) clazz.newInstance();
-					registerListener(instance);
-				} catch (InstantiationException | IllegalAccessException e) {
-					LOGGER.error("Error instantiating plugin", e);
-				}
+			try {
+				// Create a new instance of the plugin class and store it
+				ExternalListener instance = (ExternalListener) clazz.getDeclaredConstructor().newInstance();
+				registerListener(instance);
+			} catch (InstantiationException | IllegalAccessException | IllegalArgumentException | InvocationTargetException | NoSuchMethodException | SecurityException e) {
+				LOGGER.error("Error instantiating plugin", e);
 			}
 		}
 	}
@@ -436,35 +460,20 @@ public class ExternalFactory {
 	 * been instantiated by {@link #instantiateEarlyListeners()}.
 	 */
 	public static void instantiateLateListeners() {
-		for (Class<?> clazz: externalListenerClasses) {
-			// Only AdditionalFolderAtRoot and AdditionalFoldersAtRoot
-			// classes have been skipped by lookup().
-			if (AdditionalFolderAtRoot.class.isAssignableFrom(clazz) || AdditionalFoldersAtRoot.class.isAssignableFrom(clazz)) {
-				try {
-					// Create a new instance of the plugin class and store it
-					ExternalListener instance = (ExternalListener) clazz.newInstance();
-					registerListener(instance);
-				} catch (InstantiationException | IllegalAccessException e) {
-					LOGGER.error("Error instantiating plugin", e);
-				}
-			}
-		}
-
 		allDone = true;
 	}
 
 	private static void postInstall(Class<?> clazz) {
 		Method postInstall;
 		try {
-			postInstall = clazz.getDeclaredMethod("postInstall", null);
+			postInstall = clazz.getDeclaredMethod("postInstall", (Class<?>[]) null);
 
 			if (Modifier.isStatic(postInstall.getModifiers())) {
-				postInstall.invoke(null, null);
+				postInstall.invoke((Object[]) null, (Object[]) null);
 			}
-		}
-
-		// Ignore all errors
-		catch (SecurityException | NoSuchMethodException | IllegalArgumentException | IllegalAccessException | InvocationTargetException e) {
+		} catch (SecurityException | NoSuchMethodException | IllegalArgumentException |
+			IllegalAccessException | InvocationTargetException e) {
+			// Ignore all errors
 		}
 	}
 
@@ -485,18 +494,10 @@ public class ExternalFactory {
 				doUpdate(update, Messages.getString("NetworkTab.48") + " " + clazz.getSimpleName());
 				postInstall(clazz);
 				LOGGER.debug("do inst of " + clazz.getSimpleName());
-				instance = (ExternalListener) clazz.newInstance();
-				doUpdate(update,instance.name() + " " + Messages.getString("NetworkTab.49"));
+				instance = (ExternalListener) clazz.getDeclaredConstructor().newInstance();
+				doUpdate(update, instance.name() + " " + Messages.getString("NetworkTab.49"));
 				registerListener(instance);
-
-				if (PMS.get().getFrame() instanceof LooksFrame) {
-					LooksFrame frame = (LooksFrame) PMS.get().getFrame();
-
-					if (!frame.getPt().appendPlugin(instance)) {
-						LOGGER.warn("Plugin limit of 30 has been reached");
-					}
-				}
-			} catch (InstantiationException | IllegalAccessException e) {
+			} catch (InstantiationException | IllegalAccessException | IllegalArgumentException | InvocationTargetException | NoSuchMethodException | SecurityException e) {
 				LOGGER.error("Error instantiating plugin", e);
 			}
 		}
@@ -509,7 +510,7 @@ public class ExternalFactory {
 	}
 
 	private static boolean quoted(String s) {
-		return s.startsWith("\"") && s.endsWith("\""); 
+		return s.startsWith("\"") && s.endsWith("\"");
 	}
 
 	private static String quote(String s) {
@@ -534,7 +535,7 @@ public class ExternalFactory {
 					res.args = null;
 				}
 				if (res.url != null || res.precoder != null || res.args != null) {
-					LOGGER.debug(((ExternalListener)resolver).name() + " resolver:" +
+					LOGGER.debug(((ExternalListener) resolver).name() + " resolver:" +
 						(res.url == null ? "" : " url=" + res.url) +
 						(res.precoder == null ? "" : " precoder=" + res.precoder) +
 						(res.args == null ? "" : " args=" + res.args));

@@ -18,75 +18,33 @@
  */
 package net.pms.dlna;
 
-import com.sun.syndication.feed.synd.SyndCategory;
-import com.sun.syndication.feed.synd.SyndEnclosure;
-import com.sun.syndication.feed.synd.SyndEntry;
-import com.sun.syndication.feed.synd.SyndFeed;
-import com.sun.syndication.io.SyndFeedInput;
-import com.sun.syndication.io.XmlReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.commons.lang3.StringUtils;
-import org.jdom.Content;
-import org.jdom.Element;
+import org.jdom2.Content;
+import org.jdom2.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.rometools.rome.feed.synd.SyndCategory;
+import com.rometools.rome.feed.synd.SyndEnclosure;
+import com.rometools.rome.feed.synd.SyndEntry;
+import com.rometools.rome.feed.synd.SyndFeed;
+import com.rometools.rome.io.SyndFeedInput;
+import com.rometools.rome.io.XmlReader;
 
-/**
- * TODO: Change all instance variables to private. For backwards compatibility
- * with external plugin code the variables have all been marked as deprecated
- * instead of changed to private, but this will surely change in the future.
- * When everything has been changed to private, the deprecated note can be
- * removed.
- */
 public class Feed extends DLNAResource {
 	private static final Logger LOGGER = LoggerFactory.getLogger(Feed.class);
 	private static final int REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String name;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String url;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String tempItemTitle;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String tempItemLink;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String tempFeedLink;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String tempCategory;
-
-	/**
-	 * @deprecated Use standard getter and setter to access this variable.
-	 */
-	@Deprecated
-	protected String tempItemThumbURL;
+	private String name;
+	private String url;
+	private String tempItemTitle;
+	private String tempItemLink;
+	private String tempFeedLink;
+	private String tempCategory;
+	private String tempItemThumbURL;
 
 	@Override
 	protected void resolveOnce() {
@@ -99,27 +57,26 @@ public class Feed extends DLNAResource {
 
 	public Feed(String name, String url, int type) {
 		super(type);
-		setUrl(url);
-		setName(name);
+		this.url = url;
+		this.name = name;
 	}
 
-	@SuppressWarnings("unchecked")
 	public void parse() throws Exception {
 		SyndFeedInput input = new SyndFeedInput();
-		byte b[] = downloadAndSendBinary(url);
+		byte[] b = downloadAndSendBinary(url);
 		if (b != null) {
 			SyndFeed feed = input.build(new XmlReader(new ByteArrayInputStream(b)));
-			setName(feed.getTitle());
+			name = feed.getTitle();
 			if (feed.getCategories() != null && feed.getCategories().size() > 0) {
-				SyndCategory category = (SyndCategory) feed.getCategories().get(0);
-				setTempCategory(category.getName());
+				SyndCategory category = feed.getCategories().get(0);
+				tempCategory = category.getName();
 			}
 			List<SyndEntry> entries = feed.getEntries();
 			for (SyndEntry entry : entries) {
-				setTempItemTitle(entry.getTitle());
-				setTempItemLink(entry.getLink());
-				setTempFeedLink(entry.getUri());
-				setTempItemThumbURL(null);
+				tempItemTitle = entry.getTitle();
+				tempItemLink = entry.getLink();
+				tempFeedLink = entry.getUri();
+				tempItemThumbURL = null;
 
 				ArrayList<Element> elements = (ArrayList<Element>) entry.getForeignMarkup();
 				for (Element elt : elements) {
@@ -136,7 +93,7 @@ public class Feed extends DLNAResource {
 				List<SyndEnclosure> enclosures = entry.getEnclosures();
 				for (SyndEnclosure enc : enclosures) {
 					if (StringUtils.isNotBlank(enc.getUrl())) {
-						setTempItemLink(enc.getUrl());
+						tempItemLink = enc.getUrl();
 					}
 				}
 				manageItem();
@@ -145,11 +102,10 @@ public class Feed extends DLNAResource {
 		setLastModified(System.currentTimeMillis());
 	}
 
-	@SuppressWarnings("unchecked")
 	private void parseElement(Element elt, boolean parseLink) {
 		if ("content".equals(elt.getName()) && "media".equals(elt.getNamespacePrefix())) {
 			if (parseLink) {
-				setTempItemLink(elt.getAttribute("url").getValue());
+				tempItemLink = elt.getAttribute("url").getValue();
 			}
 			List<Content> subElts = elt.getContent();
 			for (Content subelt : subElts) {
@@ -158,13 +114,13 @@ public class Feed extends DLNAResource {
 				}
 			}
 		}
-		if ("thumbnail".equals(elt.getName()) && "media".equals(elt.getNamespacePrefix())
-				&& getTempItemThumbURL() == null) {
-			setTempItemThumbURL(elt.getAttribute("url").getValue());
+		if ("thumbnail".equals(elt.getName()) && "media".equals(elt.getNamespacePrefix()) &&
+				tempItemThumbURL == null) {
+			tempItemThumbURL = elt.getAttribute("url").getValue();
 		}
-		if ("image".equals(elt.getName()) && "exInfo".equals(elt.getNamespacePrefix())
-				&& getTempItemThumbURL() == null) {
-			setTempItemThumbURL(elt.getValue());
+		if ("image".equals(elt.getName()) && "exInfo".equals(elt.getNamespacePrefix()) &&
+				tempItemThumbURL == null) {
+			tempItemThumbURL = elt.getValue();
 		}
 	}
 
@@ -188,12 +144,6 @@ public class Feed extends DLNAResource {
 		return 0;
 	}
 
-	// XXX unused
-	@Deprecated
-	public long lastModified() {
-		return 0;
-	}
-
 	@Override
 	public String getSystemName() {
 		return url;
@@ -205,7 +155,7 @@ public class Feed extends DLNAResource {
 	}
 
 	protected void manageItem() {
-		FeedItem fi = new FeedItem(getTempItemTitle(), getTempItemLink(), getTempItemThumbURL(), null, getSpecificType());
+		FeedItem fi = new FeedItem(tempItemTitle, tempItemLink, tempItemThumbURL, null, getSpecificType());
 		addChild(fi);
 	}
 

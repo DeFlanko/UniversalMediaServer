@@ -1,87 +1,139 @@
+/*
+ * Universal Media Server, for streaming any media to DLNA
+ * compatible renderers based on the http://www.ps3mediaserver.org.
+ * Copyright (C) 2012 UMS developers.
+ *
+ * This program is a free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; version 2
+ * of the License only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ */
+
 package net.pms.newgui;
 
 import java.awt.*;
-import java.awt.event.*;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.*;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
 import net.pms.Messages;
 import net.pms.PMS;
 import net.pms.configuration.PmsConfiguration;
 import net.pms.configuration.RendererConfiguration;
-import org.apache.commons.configuration.ConfigurationException;
+import net.pms.newgui.components.IllegalChildException;
+import net.pms.newgui.components.SearchableMutableTreeNode;
+import net.pms.util.tree.CheckTreeManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class SelectRenderers extends JPanel implements ActionListener {
+public class SelectRenderers extends JPanel {
+	private static final Logger LOGGER = LoggerFactory.getLogger(SelectRenderers.class);
 	private static final long serialVersionUID = -2724796596060834064L;
 	private static PmsConfiguration configuration = PMS.getConfiguration();
-	private final static List<JCheckBox> checkBoxes = new ArrayList<>();
-	private JButton selectAll = new JButton(Messages.getString("GeneralTab.7"));
-	private JButton deselectAll = new JButton(Messages.getString("GeneralTab.8"));
-	private static ArrayList<String> allRenderersNames = RendererConfiguration.getAllRenderersNames();
-	private static String ignoredRenderers = configuration.getIgnoredRenderers();
-	private static final Logger LOGGER = LoggerFactory.getLogger(SelectRenderers.class);
+	private static List<String> savedSelectedRenderers = configuration.getSelectedRenderers();
+	private CheckTreeManager checkTreeManager;
+	private JTree srvTree;
+	private SearchableMutableTreeNode allRenderers;
+	private static final String ALL_RENDERERS_TREE_NAME = configuration.allRenderers;
+	private boolean init = false;
 
 	public SelectRenderers() {
 		super(new BorderLayout());
-		JPanel checkPanel = new JPanel(new GridLayout(0, 3));
-
-		selectAll.addActionListener(this);
-		checkPanel.add(selectAll);
-
-		deselectAll.addActionListener(this);
-		checkPanel.add(deselectAll);
-
-		checkPanel.add(new JLabel(""));
-		checkPanel.add(new JLabel("____________________________"));
-		checkPanel.add(new JLabel("____________________________"));
-		checkPanel.add(new JLabel("____________________________"));
-
-		for (String rendererName : allRenderersNames) {
-			JCheckBox checkbox = new JCheckBox(rendererName, !ignoredRenderers.contains(rendererName));
-			checkBoxes.add(checkbox);
-			checkPanel.add(checkbox);
-		}
-
-		checkPanel.applyComponentOrientation(ComponentOrientation.getOrientation(new Locale(configuration.getLanguage())));
-		add(checkPanel, BorderLayout.LINE_START);
-		setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
 	}
 
-	/**
-	 * Listens to the buttons.
-	 */
-	@Override
-	public void actionPerformed(ActionEvent e) {
-		Object source = e.getSource();
-		if (source instanceof JButton) {
-			if (source.equals(selectAll)) {
-				deselectAll.setSelected(false);
-				for (JCheckBox checkBox : checkBoxes) {
-					checkBox.setSelected(true);
+	public void build() {
+		JPanel checkPanel = new JPanel();
+		checkPanel.applyComponentOrientation(ComponentOrientation.getOrientation(PMS.getLocale()));
+		add(checkPanel, BorderLayout.LINE_START);
+		allRenderers = new SearchableMutableTreeNode(Messages.getString("GeneralTab.13"));
+
+		Pattern pattern = Pattern.compile("^\\s*([^\\s]*) ?([^\\s].*?)?\\s*$");
+		for (String renderer : RendererConfiguration.getAllRenderersNames()) {
+			Matcher match = pattern.matcher(renderer);
+			if (match.find()) {
+				// Find or create group or single name renderer
+				SearchableMutableTreeNode node = null;
+				try {
+					node = allRenderers.findChild(match.group(1));
+				} catch (IllegalChildException e) {}
+
+				if (node == null) {
+					node = new SearchableMutableTreeNode(match.group(1));
+					allRenderers.add(node);
 				}
-			} else if (source.equals(deselectAll)) {
-				selectAll.setSelected(false);
-				for (JCheckBox checkBox : checkBoxes) {
-					checkBox.setSelected(false);
+
+				// Find or create subgroup/name
+				if (match.groupCount() > 1 && match.group(2) != null) {
+					SearchableMutableTreeNode subNode = null;
+					try {
+						subNode = node.findChild(match.group(2));
+					} catch (IllegalChildException e) {}
+					if (subNode != null) {
+						LOGGER.warn("Renderer {} found twice, ignoring repeated entry", renderer);
+					} else {
+						subNode = new SearchableMutableTreeNode(match.group(2));
+						node.add(subNode);
+					}
 				}
+			} else {
+				LOGGER.warn("Can't parse renderer name \"{}\"", renderer);
 			}
 		}
+
+		srvTree = new JTree(new DefaultTreeModel(allRenderers));
+		checkTreeManager = new CheckTreeManager(srvTree);
+		checkPanel.add(new JScrollPane(srvTree));
+		checkPanel.setSize(400, 500);
 	}
 
 	/**
 	 * Create the GUI and show it.
 	 */
 	public void showDialog() {
+		if (!init) {
+			// Initial call
+			build();
+			init = true;
+		}
+
+		srvTree.validate();
 		// Refresh setting if modified
-		ignoredRenderers = configuration.getIgnoredRenderers();
-		for (JCheckBox checkBox : checkBoxes) {
-			if (ignoredRenderers.contains(checkBox.getText())) {
-				checkBox.setSelected(false);
+		savedSelectedRenderers = configuration.getSelectedRenderers();
+		TreePath root = new TreePath(allRenderers);
+		if (savedSelectedRenderers.isEmpty() || (savedSelectedRenderers.size() == 1 && savedSelectedRenderers.get(0) == null)) {
+			checkTreeManager.getSelectionModel().clearSelection();
+		} else if (savedSelectedRenderers.size() == 1 && savedSelectedRenderers.get(0).equals(ALL_RENDERERS_TREE_NAME)) {
+			checkTreeManager.getSelectionModel().setSelectionPath(root);
+		} else {
+			if (root.getLastPathComponent() instanceof SearchableMutableTreeNode) {
+				SearchableMutableTreeNode rootNode = (SearchableMutableTreeNode) root.getLastPathComponent();
+				SearchableMutableTreeNode node = null;
+				List<TreePath> selectedRenderersPath = new ArrayList<>(savedSelectedRenderers.size());
+				for (String selectedRenderer : savedSelectedRenderers) {
+					try {
+						node = rootNode.findInBranch(selectedRenderer, true);
+					} catch (IllegalChildException e) {}
+
+					if (node != null) {
+						selectedRenderersPath.add(new TreePath(node.getPath()));
+					}
+				}
+				checkTreeManager.getSelectionModel().setSelectionPaths(selectedRenderersPath.toArray(new TreePath[selectedRenderersPath.size()]));
 			} else {
-				checkBox.setSelected(true);
+				LOGGER.error("Illegal node class in SelectRenderers.showDialog(): {}", root.getLastPathComponent().getClass().getSimpleName());
 			}
 		}
 
@@ -95,21 +147,50 @@ public class SelectRenderers extends JPanel implements ActionListener {
 			null,
 			null
 		);
+
 		if (selectRenderers == JOptionPane.OK_OPTION) {
-			StringBuilder buildIgnoredRenders = new StringBuilder();
-			for (JCheckBox checkBox : checkBoxes) {
-				if (!checkBox.isSelected()) {
-					buildIgnoredRenders.append(checkBox.getText()).append(",");
+			TreePath[] selected = checkTreeManager.getSelectionModel().getSelectionPaths();
+			if (selected.length == 0) {
+				if (configuration.setSelectedRenderers("")) {
+					PMS.get().getFrame().setReloadable(true); // notify the user to restart the server
+				}
+			} else if (
+				selected.length == 1 && selected[0].getLastPathComponent() instanceof SearchableMutableTreeNode &&
+				((SearchableMutableTreeNode) selected[0].getLastPathComponent()).getNodeName().equals(allRenderers.getNodeName())
+			) {
+				if (configuration.setSelectedRenderers(ALL_RENDERERS_TREE_NAME)) {
+					PMS.get().getFrame().setReloadable(true); // notify the user to restart the server
+				}
+			} else {
+				List<String> selectedRenderers = new ArrayList<>();
+				for (TreePath path : selected) {
+					String rendererName = "";
+					if (path.getPathComponent(0).equals(allRenderers)) {
+						for (int i = 1; i < path.getPathCount(); i++) {
+							if (path.getPathComponent(i) instanceof SearchableMutableTreeNode) {
+								if (!rendererName.isEmpty()) {
+									rendererName += " ";
+								}
+
+								rendererName += ((SearchableMutableTreeNode) path.getPathComponent(i)).getNodeName();
+							} else {
+								LOGGER.error("Invalid tree node component class {}", path.getPathComponent(i).getClass().getSimpleName());
+							}
+						}
+
+						if (!rendererName.isEmpty()) {
+							selectedRenderers.add(rendererName);
+						}
+					} else {
+						LOGGER.warn("Invalid renderer treepath encountered: {}", path.toString());
+					}
+				}
+
+				Collections.sort(selectedRenderers);
+				if (configuration.setSelectedRenderers(selectedRenderers)) {
+					PMS.get().getFrame().setReloadable(true); // notify the user to restart the server
 				}
 			}
-
-			configuration.setIgnoredRenderers(buildIgnoredRenders.toString());
-			try {
-				configuration.save();
-			} catch (ConfigurationException e) {
-				LOGGER.error("Could not save configuration", e);
-			}
-			
 		}
 	}
 }
