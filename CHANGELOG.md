@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Dependencies
+- Bump `vite` from 5.4.11 to 6.0.6 ([#47](https://github.com/DeFlanko/UniversalMediaServer/pull/47))
+
 ## [14.9.0](https://github.com/UniversalMediaServer/UniversalMediaServer/compare/14.7.0...14.8.0) (2024-12-24)
 
 ### General
