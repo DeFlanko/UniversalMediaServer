@@ -1,29 +1,26 @@
 /*
- * PS3 Media Server, for streaming any medias to your PS3.
- * Copyright (C) 2008  A.Brochard
+ * This file is part of Universal Media Server, based on PS3 Media Server.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License only.
+ * This program is a free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; version 2 of the License only.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+ * details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 51
+ * Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 package net.pms.formats;
 
 import java.util.Locale;
-import net.pms.configuration.RendererConfiguration;
-import net.pms.dlna.DLNAMediaInfo;
-import net.pms.dlna.DLNAResource;
-import net.pms.dlna.InputFile;
+import net.pms.configuration.RendererConfigurations;
 import net.pms.network.HTTPResource;
+import net.pms.renderers.Renderer;
+import net.pms.store.StoreItem;
 import net.pms.util.FileUtil;
 import net.pms.util.StringUtil;
 import org.slf4j.Logger;
@@ -46,6 +43,7 @@ public abstract class Format implements Cloneable {
 	private String matchedExtension;
 
 	public enum Identifier {
+		AACP,
 		AC3,
 		ADPCM,
 		ADTS,
@@ -112,6 +110,7 @@ public abstract class Format implements Cloneable {
 		PLAYLIST
 	}
 
+	public static final int UNSET    =  0;
 	public static final int AUDIO    =  1;
 	public static final int IMAGE    =  2;
 	public static final int VIDEO    =  4;
@@ -180,26 +179,26 @@ public abstract class Format implements Cloneable {
 	 * streamed (as opposed to having to be transcoded), <code>true</code> will
 	 * be returned.
 	 *
-	 * @param dlna The media information.
+	 * @param resource The media information.
 	 * @param renderer The renderer for which to check. If <code>null</code>
 	 *                 is set as renderer, the default renderer configuration
 	 *                 will be used.
 	 * @return Whether the format can be handled by the renderer
 	 * @since 1.50.1
 	 */
-	public boolean isCompatible(DLNAResource dlna, RendererConfiguration renderer) {
-		RendererConfiguration referenceRenderer;
+	public boolean isCompatible(StoreItem resource, Renderer renderer) {
+		Renderer referenceRenderer;
 
 		if (renderer != null) {
 			// Use the provided renderer as reference
 			referenceRenderer = renderer;
 		} else {
 			// Use the default renderer as reference
-			referenceRenderer = RendererConfiguration.getDefaultConf();
+			referenceRenderer = RendererConfigurations.getDefaultRenderer();
 		}
 
 		// Let the renderer configuration decide on native compatibility
-		return referenceRenderer.isCompatible(dlna, this);
+		return referenceRenderer.isCompatible(resource, this);
 	}
 
 	public abstract boolean transcodable();
@@ -285,19 +284,6 @@ public abstract class Format implements Cloneable {
 	}
 
 	/**
-	 * Chooses which parsing method to parse the file with.
-	 */
-	public void parse(DLNAMediaInfo media, InputFile file, int type, RendererConfiguration renderer) {
-		if (renderer != null && renderer.isUseMediaInfo()) {
-			renderer.getFormatConfiguration().parse(media, file, this, type, renderer);
-		} else {
-			media.parse(file, this, type, false, false, renderer);
-		}
-
-		LOGGER.trace("Parsing results for file \"{}\": {}", file.toString(), media.toString());
-	}
-
-	/**
 	 * Returns whether or not the matched extension of this format is among
 	 * the list of supplied extensions.
 	 *
@@ -343,4 +329,18 @@ public abstract class Format implements Cloneable {
 	 * @return The identifier.
 	 */
 	public abstract Identifier getIdentifier();
+
+	public static String getStringType(int type) {
+		return switch (type) {
+			case AUDIO -> "AUDIO";
+			case IMAGE -> "IMAGE";
+			case VIDEO -> "VIDEO";
+			case UNKNOWN -> "UNKNOWN";
+			case PLAYLIST -> "PLAYLIST";
+			case ISO -> "ISO";
+			case SUBTITLE -> "SUBTITLE";
+			default -> "NOT DEFINED";
+		};
+	}
+
 }

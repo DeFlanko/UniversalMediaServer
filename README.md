@@ -1,7 +1,7 @@
 # Universal Media Server
-![Universal Media Server CI](https://github.com/UniversalMediaServer/UniversalMediaServer/workflows/Universal%20Media%20Server%20CI/badge.svg) [![Crowdin](https://badges.crowdin.net/universalmediaserver/localized.svg)](https://crowdin.com/project/universalmediaserver)
+![Universal Media Server CI](https://github.com/UniversalMediaServer/UniversalMediaServer/workflows/CI/badge.svg) [![Crowdin](https://badges.crowdin.net/universalmediaserver/localized.svg)](https://crowdin.com/project/universalmediaserver)
 
-[<img align="right" src="https://github.com/UniversalMediaServer/UniversalMediaServer/blob/master/src/main/resources/images/logo.png?raw=true" alt="Universal Media Server" width="256" height="auto"/>][1] Universal Media Server is a DLNA-compliant UPnP Media Server.
+[<img align="right" src="https://github.com/UniversalMediaServer/UniversalMediaServer/blob/main/src/main/resources/images/logo.png?raw=true" alt="Universal Media Server" width="256" height="auto"/>][1] Universal Media Server is a DLNA, UPnP and HTTP/S Media Server.
 It is capable of sharing video, audio and images between most modern devices.
 It was originally based on PS3 Media Server by shagrath, in order to ensure greater stability and file-compatibility.
 
@@ -11,29 +11,29 @@ Universal Media Server supports all major operating systems, with versions for W
 The program streams or transcodes many different media formats with little or no configuration.
 It is powered by [FFmpeg][27], [MediaInfo][28], [OpenSubtitles][25], [Crowdin][29], [MEncoder][26], tsMuxeR, AviSynth, VLC and more, which combine to offer support for a wide range of media formats.
 
-## Current Project Developers
+## Current Project Members
 
 * [ik666][32]
 * [js-kyle][31]
+* [mik_s][7]
 * [SubJunk][3]
 * [SurfaceS][33]
 * [valib][5]
 
-## Current Forum Moderators
+## Sponsors
 
-* [atamariya][8]
-* [mik_s][7]
-* [squadjot][30]
+* [Architecture of Sales][35]
+
+[Become a sponsor][36]
 
 ## Links
 
 * [Website][1]
 * [Forum][9]
 * [Source code][10]
-* [Offical Releases][11]
+* [Official Releases][11]
 * [Issue tracker][12]
 * [Knowledge Base][13]
-* [Wiki][14]
 
 ## Thanks
 
@@ -49,8 +49,10 @@ It is powered by [FFmpeg][27], [MediaInfo][28], [OpenSubtitles][25], [Crowdin][2
 * Redlum
 * renszarv
 * [SharkHunter][4]
+* skeptical
 * taconaut
 * tcox
+* [threedguru][34]
 * tomeko
 
 ##### Thanks for documentation and contributions to the community:
@@ -59,6 +61,7 @@ It is powered by [FFmpeg][27], [MediaInfo][28], [OpenSubtitles][25], [Crowdin][2
 * meskibob
 * Optimus_prime
 * otmanix
+* [squadjot][30]
 
 ##### Thanks for significant/frequent language translations:
 
@@ -92,7 +95,6 @@ It is powered by [FFmpeg][27], [MediaInfo][28], [OpenSubtitles][25], [Crowdin][2
   [11]: https://www.universalmediaserver.com/downloads/
   [12]: https://github.com/UniversalMediaServer/UniversalMediaServer/issues?state=open
   [13]: https://support.universalmediaserver.com
-  [14]: https://github.com/UniversalMediaServer/UniversalMediaServer/wiki
   [15]: https://www.universalmediaserver.com/forum/memberlist.php?mode=viewprofile&u=4025
   [16]: https://github.com/josepma
   [17]: https://github.com/kirvx
@@ -112,3 +114,6 @@ It is powered by [FFmpeg][27], [MediaInfo][28], [OpenSubtitles][25], [Crowdin][2
   [31]: https://github.com/js-kyle
   [32]: https://github.com/ik666
   [33]: https://github.com/SurfaceS
+  [34]: https://github.com/threedguru
+  [35]: https://architectureofsales.com
+  [36]: https://www.patreon.com/universalmediaserver
