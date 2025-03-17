@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Dependencies
+- Bump `react-movable` from 3.3.1 to 3.4.1 ([#64](https://github.com/DeFlanko/UniversalMediaServer/pull/64))
+
 ## [14.9.0](https://github.com/UniversalMediaServer/UniversalMediaServer/compare/14.7.0...14.8.0) (2024-12-24)
 
 ### General
