@@ -27,7 +27,7 @@
 - Bump `com.fasterxml.jackson.core:jackson-databind` from 2.18.2 to 2.18.3 ([#5350](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5350))
 - Bump `com.github.oshi:oshi-core` from 6.6.6 to 6.7.0 ([#5351](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5351))
 - Bump `com.puppycrawl.tools:checkstyle` from 10.21.1 to 10.21.4 ([#5348](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5348))
-- Bump `eslint` from 9.21.0 to 9.22.0 ([#5384](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5384))
+- Bump `eslint` from 9.21.0 to 9.23.0 ([#5384](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5384), [#69](https://github.com/DeFlanko/UniversalMediaServer/pull/69))
 - Bump `FFmpeg` from `20250103 nightlies` to `7.1.1` including on Windows x86
 - Bump `jna-version` from 5.16.0 to 5.17.0 ([#5380](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5380))
 - Bump `org.jsoup:jsoup` from 1.18.3 to 1.19.1 ([#5349](https://github.com/UniversalMediaServer/UniversalMediaServer/pull/5349))
